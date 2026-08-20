@@ -15,7 +15,7 @@ database.init_db()
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DRIVER_PIN = "045048"
 MAX_CAPACITY = 15
-NTFY_TOPIC = "ViylM4A5cfMQgIYQ"
+NTFY_TOPIC = "arc-van-fort-knox-045048"
 
 def send_ntfy(title: str, message: str) -> bool:
     """Direct synchronous push to ntfy.sh"""
