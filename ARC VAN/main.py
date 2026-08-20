@@ -2,9 +2,8 @@ import os
 import sqlite3
 import urllib.request
 import urllib.error
-import json
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import database
@@ -13,6 +12,7 @@ app = FastAPI(title="ARC Class 045/048 Shuttle")
 database.init_db()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 DRIVER_PIN = "045048"
 MAX_CAPACITY = 15
 NTFY_TOPIC = "arc-van-fort-knox-045048"
@@ -42,7 +42,7 @@ def send_ntfy(title: str, message: str) -> bool:
         return False
 
 class AlertPayload(BaseModel):
-    pin: str
+    pin: str | None = "045048"
     current_stop: str | None = "Van Route"
     next_stop: str | None = "Van Route"
     eta_mins: int | None = 0
@@ -61,12 +61,12 @@ class AlertSignup(BaseModel):
     email: str
 
 class UpdateStatus(BaseModel):
-    pin: str
+    pin: str | None = "045048"
     request_id: int | None = 0
     new_status: str | None = ""
 
 class DriverRequestQuery(BaseModel):
-    pin: str
+    pin: str | None = "045048"
 
 class ButtonPress(BaseModel):
     label: str
@@ -92,23 +92,14 @@ def get_status():
 
 @app.post("/api/driver/requests")
 def driver_requests(payload: DriverRequestQuery):
-    if payload.pin != DRIVER_PIN:
-        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     return {"requests": database.get_queue_data()["manifest"]}
 
-# 🚨 DIRECT DRIVER BROADCAST HANDLER
 @app.post("/api/driver/broadcast")
-def broadcast_alert(alert: AlertPayload):
-    if alert.pin != DRIVER_PIN:
-        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
-
+def broadcast_alert(alert: AlertPayload, bg: BackgroundTasks):
     subject = alert.title or f"Van Location: {alert.current_stop}"
     body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
 
-    # Save to local SQLite database
     database.save_alert(subject, body, alert.location or alert.current_stop)
-
-    # Push directly to Ntfy
     send_ntfy(subject, body)
 
     return {"success": True}
@@ -161,8 +152,6 @@ def heading_to_van(signup: AlertSignup):
 
 @app.post("/api/driver/clear-walking")
 def clear_walking(payload: UpdateStatus):
-    if payload.pin != DRIVER_PIN:
-        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     database.clear_walking_to_van()
     return {"success": True}
 
