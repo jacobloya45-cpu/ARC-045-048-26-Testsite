@@ -46,21 +46,6 @@ let currentVanLocation = '';
 let accessGrants = loadAccessGrants();
 const ntfyUrl = 'https://ntfy.sh/ViylM4A5cfMQgIYQ';
 
-function notifyButtonPress(button) {
-  const label = (button.textContent || button.getAttribute('aria-label') || button.title || 'Unnamed button').trim();
-  const view = button.closest('.view')?.id.replace('-view', '') || 'navigation';
-  fetch('/api/button-press', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ label, view })
-  }).catch(() => {});
-}
-
-document.addEventListener('click', (event) => {
-  const button = event.target.closest('button');
-  if (button) notifyButtonPress(button);
-}, true);
-
 function isDriverAuthenticated() {
   return sessionStorage.getItem(driverAuthKey) === 'true';
 }
@@ -148,316 +133,33 @@ function displayVanName(text) {
   return (text || '').replace(/Van 02|VAN 02/g, '045/048 Van');
 }
 
-function setSignupMessage(message, isError = false) {
-  if (!signupMessage) return;
-  signupMessage.textContent = message;
-  signupMessage.classList.toggle('error', isError);
-}
-
 if (ntfyDriverQr) ntfyDriverQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(ntfyUrl)}`;
 if (ntfyStudentQr) ntfyStudentQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(ntfyUrl)}`;
 if (qrUrl) qrUrl.textContent = ntfyUrl;
 
-if (studentSignupForm) {
-  studentSignupForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const name = studentSignupForm.elements.name.value.trim();
-    const email = studentSignupForm.elements.email.value.trim().toLowerCase();
-    if (!name || !email || !studentSignupForm.elements.email.validity.valid) {
-      setSignupMessage('Enter your name and a valid email address.', true);
-      return;
-    }
-    fetch('/api/alerts/signup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email })
-    }).then((response) => {
-      if (!response.ok) throw new Error('Signup failed');
-      const signups = JSON.parse(localStorage.getItem(signupStorageKey) || '[]');
-      signups.push({ name, email, signedUpAt: new Date().toISOString(), van: '045/048 Van' });
-      localStorage.setItem(signupStorageKey, JSON.stringify(signups));
-      studentSignupForm.reset();
-      setSignupMessage('You are signed up. We will alert you about 045/048 Van updates.');
-    }).catch(() => setSignupMessage('Signup is unavailable right now. Please try again.', true));
-  });
-}
-
-if (headingToVanForm) {
-  headingToVanForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const name = headingToVanForm.elements.name.value.trim();
-    const email = headingToVanForm.elements.email.value.trim().toLowerCase();
-    if (!name || !email || !headingToVanForm.elements.email.validity.valid) {
-      setHeadingMessage('Enter your name and a valid email address.', true);
-      return;
-    }
-    fetch('/api/student/heading-to-van', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email })
-    }).then((response) => {
-      if (!response.ok) throw new Error('Request failed');
-      headingToVanForm.reset();
-      setHeadingMessage('Driver notified! You\'re on the list.');
-      updateWalkingCount();
-    }).catch(() => setHeadingMessage('Request failed. Please try again.', true));
-  });
-}
-
-document.querySelectorAll('.student-stop-btn').forEach((button) => button.addEventListener('click', () => {
-  document.querySelectorAll('.student-stop-btn').forEach((stop) => stop.classList.remove('selected'));
-  button.classList.add('selected');
-  if (button.dataset.pickup === 'Other') {
-    if (otherPickup) otherPickup.classList.add('visible');
-    if (otherPickupInput) otherPickupInput.focus();
-    return;
-  }
-  if (otherPickup) otherPickup.classList.remove('visible');
-  if (ridePickupInput) ridePickupInput.value = button.dataset.pickup;
-}));
-
-const setOtherPickupBtn = document.querySelector('#set-other-pickup');
-if (setOtherPickupBtn) {
-  setOtherPickupBtn.addEventListener('click', () => {
-    const pickup = otherPickupInput.value.trim();
-    if (!pickup) {
-      otherPickupInput.focus();
-      return;
-    }
-    if (ridePickupInput) ridePickupInput.value = pickup;
-    if (otherPickup) otherPickup.classList.remove('visible');
-  });
-}
-
-if (rideRequestForm) {
-  rideRequestForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const name = rideRequestForm.elements.name.value.trim();
-    const pickup = ridePickupInput ? ridePickupInput.value : '';
-    const dropoff = rideRequestForm.elements.dropoff.value.trim();
-    if (!name || !pickup || !dropoff) {
-      if (rideRequestMessage) {
-        rideRequestMessage.textContent = 'Choose a pickup stop and enter your name and destination.';
-        rideRequestMessage.classList.add('error');
-      }
-      return;
-    }
-    fetch('/api/request-ride', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, pickup, dropoff })
-    }).then((response) => {
-      if (!response.ok) throw new Error('Request failed');
-      return response.json();
-    }).then((data) => {
-      rideRequestForm.reset();
-      document.querySelectorAll('.student-stop-btn').forEach((stop) => stop.classList.remove('selected'));
-      if (ridePickupInput) ridePickupInput.value = '';
-      if (rideRequestMessage) {
-        rideRequestMessage.classList.remove('error');
-        rideRequestMessage.textContent = data.status === 'WAITLIST' ? 'Ride requested. You are on the waitlist.' : 'Ride requested. The driver has been notified.';
-      }
-    }).catch(() => {
-      if (rideRequestMessage) {
-        rideRequestMessage.textContent = 'Request failed. Please try again.';
-        rideRequestMessage.classList.add('error');
-      }
-    });
-  });
-}
-
-function setHeadingMessage(message, isError = false) {
-  if (!headingMessage) return;
-  headingMessage.textContent = message;
-  headingMessage.classList.toggle('error', isError);
-}
-
-function updateWalkingCount() {
-  fetch('/api/status', { cache: 'no-store' })
-    .then((response) => response.json())
-    .then((data) => {
-      if (data.walking_count !== undefined && walkingCount) {
-        walkingCount.innerHTML = `${data.walking_count} <small>students</small>`;
-      }
-    })
-    .catch(() => {});
-}
-
-function renderDriverRequests(requests) {
-  if (!driverRequestList) return;
-  driverRequestList.innerHTML = requests.length ? requests.map((request) => `
-    <div class="driver-request-entry">
-      <div class="request-avatar">${escapeHtml((request[1] || '?').slice(0, 2).toUpperCase())}</div>
-      <div class="driver-request-info"><strong>${escapeHtml(request[2])}</strong><span>To ${escapeHtml(request[3])}</span></div>
-      <span class="driver-request-status">${escapeHtml(request[4])}</span>
-    </div>`).join('') : '<p class="access-empty">No student pickup requests yet.</p>';
-}
-
-function pollDriverRequests() {
-  if (!isDriverAuthenticated()) return;
-  fetch('/api/driver/requests', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin: driverPin }),
-    cache: 'no-store'
-  }).then((response) => response.json()).then((data) => renderDriverRequests(data.requests || [])).catch(() => {});
-}
-
-function resetDriverCounts() {
-  if (waitingCount) waitingCount.innerHTML = '0 <small>students</small>';
-  if (walkingCount) walkingCount.innerHTML = '0 <small>students</small>';
-  fetch('/api/driver/clear-walking', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin: driverPin, request_id: 0, new_status: '' })
-  }).catch(() => {});
-}
-
 async function sendDriverAlert(title, detail, toastMessage, location = null) {
-  const response = await fetch('/api/driver/broadcast', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      pin: driverPin, 
-      current_stop: location || 'North Gate', 
-      next_stop: location || 'North Gate', 
-      eta_mins: 0, 
-      title: title, 
-      detail: detail, 
-      location: location 
-    })
-  });
-  if (!response.ok) throw new Error('Alert failed');
-  showToast(toastMessage);
-}
-
-async function pollStudentAlert() {
   try {
-    const response = await fetch('/api/alerts/latest', { cache: 'no-store' });
-    if (!response.ok) return;
-    const alert = await response.json();
-    if (!alert.id || alert.id === latestStudentAlertId) return;
-    latestStudentAlertId = alert.id;
-    if (studentAlertTitle) studentAlertTitle.textContent = displayVanName(alert.title);
-    if (studentAlertDetail) studentAlertDetail.textContent = displayVanName(alert.detail);
-    if (studentAlertTime) studentAlertTime.textContent = 'Just now';
-    const departureMatch = alert.title && alert.title.match(/departs at (.+)$/i);
-    if (departureMatch && studentDepartureTime) studentDepartureTime.textContent = departureMatch[1];
-    if (alert.location && studentVanLocation) {
-      studentVanLocation.textContent = alert.location;
-      if (studentVanLocationTime) {
-        studentVanLocationTime.textContent = alert.created_at ? `Updated ${formatAlertTime(alert.created_at)}` : 'Updated just now';
-      }
-    }
-  } catch {}
-}
-
-pollStudentAlert();
-window.setInterval(pollStudentAlert, 5000);
-
-function formatAlertTime(timestamp) {
-  const adjustedTimestamp = new Date(new Date(timestamp).getTime() - 4 * 60 * 60 * 1000);
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(adjustedTimestamp);
-}
-
-function loadAccessGrants() {
-  try {
-    const storedGrants = JSON.parse(localStorage.getItem(accessStorageKey) || '[]');
-    return Array.isArray(storedGrants) ? storedGrants.filter((grant) => grant && grant.name && grant.email && grant.grantedAt) : [];
-  } catch {
-    return [];
+    const response = await fetch('/api/driver/broadcast', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        pin: driverPin, 
+        current_stop: location || currentVanLocation || 'Shuttle Route', 
+        next_stop: location || 'Shuttle Route', 
+        eta_mins: 0, 
+        title: title, 
+        detail: detail, 
+        location: location || currentVanLocation 
+      })
+    });
+    if (!response.ok) throw new Error('Alert failed');
+    showToast(toastMessage);
+  } catch (err) {
+    showToast('Failed to post alert to Ntfy');
   }
 }
 
-function formatGrantTime(timestamp) {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(timestamp));
-}
-
-function escapeHtml(value) {
-  return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
-}
-
-function renderAccessHistory() {
-  if (!accessHistory || !accessCount) return;
-  const sortedGrants = [...accessGrants].sort((first, second) => new Date(second.grantedAt) - new Date(first.grantedAt));
-  accessCount.textContent = `${sortedGrants.length} ${sortedGrants.length === 1 ? 'grant' : 'grants'}`;
-  accessHistory.innerHTML = sortedGrants.length ? sortedGrants.map((grant) => `
-    <div class="access-entry">
-      <div class="request-avatar access-avatar">${escapeHtml(grant.name.split(' ').map((part) => part[0]).join('').slice(0, 2).toUpperCase())}</div>
-      <div class="access-entry-info"><strong>${escapeHtml(grant.name)}</strong><span>${escapeHtml(grant.email)}</span><small>Granted by ${escapeHtml(grant.grantedBy || 'Jordan Miles')}</small></div>
-      <div class="access-entry-meta"><span class="access-scope">FULL CONSOLE</span><time datetime="${grant.grantedAt}">${formatGrantTime(grant.grantedAt)}</time></div>
-    </div>`).join('') : '<p class="access-empty">No drivers have been granted access yet.</p>';
-}
-
-function setAccessMessage(message, isError = false) {
-  if (!accessFormMessage) return;
-  accessFormMessage.textContent = message;
-  accessFormMessage.classList.toggle('error', isError);
-}
-
-if (accessForm) {
-  accessForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const name = accessForm.elements.name.value.trim();
-    const email = accessForm.elements.email.value.trim().toLowerCase();
-    if (!name || !email || !accessForm.elements.email.validity.valid) {
-      setAccessMessage('Enter a driver name and a valid email address.', true);
-      return;
-    }
-    if (accessGrants.some((grant) => grant.email.toLowerCase() === email)) {
-      setAccessMessage('That driver already has access.', true);
-      return;
-    }
-    const grant = { 
-      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`, 
-      name, 
-      email, 
-      grantedBy: 'Jordan Miles', 
-      grantedAt: new Date().toISOString(), 
-      permission: 'full-console' 
-    };
-    accessGrants.push(grant);
-    localStorage.setItem(accessStorageKey, JSON.stringify(accessGrants));
-    accessForm.reset();
-    renderAccessHistory();
-    setAccessMessage(`Access granted to ${name}.`);
-    showToast(`Driver access granted to ${name}`);
-  });
-}
-
-function renderRequests() {
-  if (!requestList || !requestBadge || !waitingCount) return;
-  requestList.innerHTML = requests.map((request) => `
-    <div class="request-item">
-      <div class="request-avatar ${request.tone}">${request.initials}</div>
-      <div class="request-info"><strong>${request.name}</strong><span>${request.route}</span></div>
-      <span class="request-time">${request.time}</span>
-      <button class="request-alert-btn" data-student="${request.name}" data-pickup="${request.pickup}" title="Alert ${request.name}">Alert student</button>
-    </div>`).join('');
-  requestBadge.textContent = requests.length;
-  waitingCount.innerHTML = `${requests.length} <small>students</small>`;
-}
-
-function showToast(message) {
-  if (!toast) return;
-  toast.textContent = message;
-  toast.classList.add('show');
-  window.setTimeout(() => toast.classList.remove('show'), 3000);
-}
-
-function switchView(view) {
-  document.querySelectorAll('.view').forEach((section) => section.classList.remove('active-view'));
-  const targetView = document.querySelector(`#${view}-view`);
-  if (targetView) targetView.classList.add('active-view');
-  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
-  const pageTitle = document.querySelector('#page-title');
-  if (pageTitle) {
-    pageTitle.innerHTML = view === 'driver' ? 'Monitor the App and be Accurate <span>✦</span>' : 'Your ride, on your time <span>✦</span>';
-  }
-}
-
-document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
-
+// Step 1 - Choose Where Van is Now (Broadcasts instantly upon button click)
 function showDestinationStep(location) {
   currentVanLocation = location;
   const prompt = document.querySelector('#location-prompt');
@@ -466,6 +168,14 @@ function showDestinationStep(location) {
   if (destControls) destControls.classList.add('visible');
   const otherLoc = document.querySelector('#other-location');
   if (otherLoc) otherLoc.classList.remove('visible');
+
+  // Immediately send location update to Ntfy
+  sendDriverAlert(
+    `🚐 Van Location: ${location}`,
+    `045/048 Van is currently at ${location}.`,
+    `Van location posted: ${location}`,
+    location
+  );
 }
 
 function resetLocationWorkflow() {
@@ -484,11 +194,15 @@ function resetLocationWorkflow() {
   if (otherDestInput) otherDestInput.value = '';
 }
 
+// Step 2 - Send destination update
 function sendLocationUpdate(destination) {
-  const currentLocation = currentVanLocation;
-  sendDriverAlert(`045/048 Van is at ${currentLocation}`, `The Van is going to ${destination}.`, `Student alert sent: ${currentLocation} to ${destination}`, currentLocation)
-    .then(resetLocationWorkflow)
-    .catch(() => showToast('Unable to send student alert'));
+  const currentLocation = currentVanLocation || 'Van Route';
+  sendDriverAlert(
+    `🚐 Van En Route: ${destination}`,
+    `The Van is currently at ${currentLocation} and heading to ${destination}.`,
+    `Alert sent: Heading to ${destination}`,
+    currentLocation
+  ).then(resetLocationWorkflow);
 }
 
 document.querySelectorAll('.location-btn').forEach((button) => button.addEventListener('click', () => {
@@ -551,9 +265,41 @@ if (sendDestOtherBtn) {
   });
 }
 
-const announceButton = document.querySelector('#announce-btn');
-if (announceButton) {
-  announceButton.addEventListener('click', () => sendDriverAlert('Boarding update', 'Students waiting for 045/048 Van may board now.', 'Boarding update sent to students').catch(() => showToast('Unable to send student alert')));
+// Departure alert button
+if (departureAlertButton) {
+  departureAlertButton.addEventListener('click', () => {
+    const activeOption = document.querySelector('.departure-option.active');
+    const waitTime = activeOption ? activeOption.dataset.wait : '5';
+    const departure = new Date(Date.now() + Number(waitTime) * 60000);
+    const departureLabel = departure.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    
+    sendDriverAlert(
+      `⏱️ 045/048 Van departs at ${departureLabel}`,
+      `The driver expects to depart in about ${waitTime} minutes.`,
+      `Departure alert sent: ${departureLabel}`
+    );
+  });
+}
+
+// Availability buttons
+if (vanFullReturnButton) {
+  vanFullReturnButton.addEventListener('click', () => {
+    sendDriverAlert(
+      '🚐 045/048 Van is currently full',
+      'The van is at capacity. The driver will return shortly for more rides.',
+      'Alert sent: Van is full'
+    );
+  });
+}
+
+if (noRidesButton) {
+  noRidesButton.addEventListener('click', () => {
+    sendDriverAlert(
+      '🛑 No rides available right now',
+      'Service is paused. Please check back later for the next available ride.',
+      'Alert sent: Service paused'
+    );
+  });
 }
 
 document.querySelectorAll('.departure-option').forEach((button) => button.addEventListener('click', () => {
@@ -562,73 +308,80 @@ document.querySelectorAll('.departure-option').forEach((button) => button.addEve
   if (departureTime) departureTime.textContent = `${button.dataset.wait} min`;
 }));
 
-if (departureAlertButton) {
-  departureAlertButton.addEventListener('click', () => {
-    const activeOption = document.querySelector('.departure-option.active');
-    const waitTime = activeOption ? activeOption.dataset.wait : '5';
-    const departure = new Date(Date.now() + Number(waitTime) * 60000);
-    const departureLabel = departure.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-    if (studentAlertTitle) studentAlertTitle.textContent = `045/048 Van departs at ${departureLabel}`;
-    if (studentAlertDetail) studentAlertDetail.textContent = `The driver expects to leave in about ${waitTime} minutes.`;
-    if (studentDepartureTime) studentDepartureTime.textContent = departureLabel;
-    if (studentAlertTime) studentAlertTime.textContent = 'Just now';
-    sendDriverAlert(`045/048 Van departs at ${departureLabel}`, `The driver expects to leave in about ${waitTime} minutes.`, `Students alerted: departure expected at ${departureLabel}`).catch(() => showToast('Unable to send student alert'));
-    departureAlertButton.textContent = 'Students alerted';
-    departureAlertButton.disabled = true;
-    window.setTimeout(() => {
-      departureAlertButton.textContent = 'Alert students';
-      departureAlertButton.disabled = false;
-    }, 3000);
-  });
+function showToast(message) {
+  if (!toast) return;
+  toast.textContent = message;
+  toast.classList.add('show');
+  window.setTimeout(() => toast.classList.remove('show'), 3000);
 }
 
-function sendAvailabilityAlert(title, detail, toastMessage, button) {
-  if (studentAlertTitle) studentAlertTitle.textContent = title;
-  if (studentAlertDetail) studentAlertDetail.textContent = detail;
-  if (studentAlertTime) studentAlertTime.textContent = 'Just now';
-  sendDriverAlert(title, detail, toastMessage).catch(() => showToast('Unable to send student alert'));
-  button.classList.add('sent');
-  window.setTimeout(() => button.classList.remove('sent'), 3000);
+function switchView(view) {
+  document.querySelectorAll('.view').forEach((section) => section.classList.remove('active-view'));
+  const targetView = document.querySelector(`#${view}-view`);
+  if (targetView) targetView.classList.add('active-view');
+  document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
 }
 
-if (vanFullReturnButton) {
-  vanFullReturnButton.addEventListener('click', () => sendAvailabilityAlert(
-    '045/048 Van is currently full',
-    'The driver will return for more rides shortly.',
-    'Students alerted: the van is full and will be back soon',
-    vanFullReturnButton
-  ));
+document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
+
+function updateWalkingCount() {
+  fetch('/api/status', { cache: 'no-store' })
+    .then((res) => res.json())
+    .then((data) => {
+      if (data.walking_count !== undefined && walkingCount) {
+        walkingCount.innerHTML = `${data.walking_count} <small>students</small>`;
+      }
+    })
+    .catch(() => {});
 }
 
-if (noRidesButton) {
-  noRidesButton.addEventListener('click', () => sendAvailabilityAlert(
-    'No rides available right now',
-    'Please check back later for the next available ride.',
-    'Students alerted: no rides are available at this time',
-    noRidesButton
-  ));
+function resetDriverCounts() {
+  if (waitingCount) waitingCount.innerHTML = '0 <small>students</small>';
+  if (walkingCount) walkingCount.innerHTML = '0 <small>students</small>';
+  fetch('/api/driver/clear-walking', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin: driverPin, request_id: 0, new_status: '' })
+  }).catch(() => {});
+}
+
+function loadAccessGrants() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(accessStorageKey) || '[]');
+    return Array.isArray(stored) ? stored : [];
+  } catch {
+    return [];
+  }
+}
+
+function renderRequests() {
+  if (!requestList || !requestBadge || !waitingCount) return;
+  requestList.innerHTML = requests.map((request) => `
+    <div class="request-item">
+      <div class="request-avatar ${request.tone}">${request.initials}</div>
+      <div class="request-info"><strong>${request.name}</strong><span>${request.route}</span></div>
+      <span class="request-time">${request.time}</span>
+      <button class="request-alert-btn" data-student="${request.name}" data-pickup="${request.pickup}">Alert student</button>
+    </div>`).join('');
+  requestBadge.textContent = requests.length;
+  waitingCount.innerHTML = `${requests.length} <small>students</small>`;
 }
 
 if (requestList) {
   requestList.addEventListener('click', (event) => {
     const button = event.target.closest('.request-alert-btn');
     if (!button) return;
-    showToast(`Alert sent to ${button.dataset.student}: 045/048 Van is at ${button.dataset.pickup}`);
+    sendDriverAlert(
+      `🚐 Pickup Alert: ${button.dataset.student}`,
+      `045/048 Van is currently at ${button.dataset.pickup} for pickup.`,
+      `Alert sent to ${button.dataset.student}`
+    );
     button.textContent = 'Alert sent';
     button.disabled = true;
   });
   renderRequests();
 }
 
-renderAccessHistory();
 updateDriverControls();
-pollDriverRequests();
-window.setInterval(pollDriverRequests, 5000);
 updateWalkingCount();
 window.setInterval(updateWalkingCount, 5000);
-
-if (window.location.hash === '#student-signup') {
-  switchView('student');
-  const signupElem = document.querySelector('#student-signup');
-  if (signupElem) signupElem.scrollIntoView({ behavior: 'smooth' });
-}
