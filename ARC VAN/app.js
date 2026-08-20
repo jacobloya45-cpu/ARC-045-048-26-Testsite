@@ -38,7 +38,7 @@ const ridePickupInput = document.querySelector('#ride-pickup');
 const otherPickup = document.querySelector('#other-pickup');
 const otherPickupInput = document.querySelector('#other-pickup-input');
 const driverPin = '045048';
-const driverAuthKey = 'arc-van-driver-auth';
+const ntfyUrl = 'https://ntfy.sh/arc-van-fort-knox-045048';
 const driverRequestList = document.querySelector('#driver-request-list');
 
 let latestStudentAlertId = 0;
