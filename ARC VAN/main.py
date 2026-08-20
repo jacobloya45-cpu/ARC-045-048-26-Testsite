@@ -2,8 +2,9 @@ import os
 import sqlite3
 import urllib.request
 import urllib.error
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import FileResponse
+import json
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 import database
@@ -12,28 +13,48 @@ app = FastAPI(title="ARC Class 045/048 Shuttle")
 database.init_db()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 DRIVER_PIN = "045048"
 MAX_CAPACITY = 15
-NTFY_SERVER = os.getenv("NTFY_SERVER", "https://ntfy.sh").rstrip("/")
-DEFAULT_NTFY_TOPIC = "ViylM4A5cfMQgIYQ"
-NTFY_DRIVER_TOPIC = os.getenv("NTFY_DRIVER_TOPIC", "").strip() or DEFAULT_NTFY_TOPIC
-NTFY_STUDENT_TOPIC = os.getenv("NTFY_STUDENT_TOPIC", "").strip() or DEFAULT_NTFY_TOPIC
+NTFY_TOPIC = "ViylM4A5cfMQgIYQ"
+
+def send_ntfy(title: str, message: str) -> bool:
+    """Direct synchronous push to ntfy.sh"""
+    url = f"https://ntfy.sh/{NTFY_TOPIC}"
+    headers = {
+        "Title": title.encode("utf-8").decode("latin-1", "ignore"),
+        "Priority": "high",
+        "Tags": "minibus,round_pushpin",
+        "User-Agent": "ARC-Van-Tracker/1.0"
+    }
+    
+    req = urllib.request.Request(
+        url,
+        data=message.encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            print(f"✅ [NTFY SUCCESS] Alert published: '{title}' - Status {resp.status}")
+            return True
+    except Exception as e:
+        print(f"❌ [NTFY ERROR] Failed to send alert: {e}")
+        return False
+
+class AlertPayload(BaseModel):
+    pin: str
+    current_stop: str | None = "Van Route"
+    next_stop: str | None = "Van Route"
+    eta_mins: int | None = 0
+    title: str | None = None
+    detail: str | None = None
+    location: str | None = None
 
 class RideRequest(BaseModel):
     name: str
     email: str | None = None
     pickup: str
     dropoff: str
-
-class AlertPayload(BaseModel):
-    pin: str
-    current_stop: str | None = "Main Gate"
-    next_stop: str | None = "Main Gate"
-    eta_mins: int | None = 0
-    title: str | None = None
-    detail: str | None = None
-    location: str | None = None
 
 class AlertSignup(BaseModel):
     name: str
@@ -51,43 +72,12 @@ class ButtonPress(BaseModel):
     label: str
     view: str | None = None
 
-def publish_ntfy(topic: str, title: str, message: str) -> bool:
-    if not topic:
-        return False
-    header_title = title.encode("ascii", "ignore").decode("ascii") or "ARC Van Alert"
-    request = urllib.request.Request(
-        f"{NTFY_SERVER}/{topic}",
-        data=message.encode("utf-8"),
-        headers={"Title": header_title, "Priority": "high", "Tags": "minibus,round_pushpin"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=8) as resp:
-            print(f"✅ [NTFY SUCCESS] {title} -> {topic}")
-            return True
-    except Exception as error:
-        print(f"❌ [NTFY FAILED] {error}")
-        return False
-
-def publish_to_configured_topics(title: str, message: str):
-    publish_ntfy(NTFY_STUDENT_TOPIC, title, message)
-    if NTFY_DRIVER_TOPIC != NTFY_STUDENT_TOPIC:
-        publish_ntfy(NTFY_DRIVER_TOPIC, title, message)
-
 @app.get("/healthz")
 def health():
     return {"status": "healthy"}
 
 @app.post("/api/button-press")
-def button_press(press: ButtonPress, bg: BackgroundTasks):
-    label = press.label.strip()[:100] or "Button Action"
-    view = press.view.strip() if press.view else "Navigation"
-    # Broadcast every button click directly to ntfy
-    bg.add_task(
-        publish_to_configured_topics,
-        f"🚐 Van Action: {label}",
-        f"Driver action selected in {view}: {label}"
-    )
+def button_press(press: ButtonPress):
     return {"success": True}
 
 @app.get("/api/alerts/latest")
@@ -106,16 +96,21 @@ def driver_requests(payload: DriverRequestQuery):
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     return {"requests": database.get_queue_data()["manifest"]}
 
+# 🚨 DIRECT DRIVER BROADCAST HANDLER
 @app.post("/api/driver/broadcast")
-def broadcast_alert(alert: AlertPayload, bg: BackgroundTasks):
+def broadcast_alert(alert: AlertPayload):
     if alert.pin != DRIVER_PIN:
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
 
-    subject = alert.title or f"🚐 Van Location: {alert.current_stop}"
+    subject = alert.title or f"Van Location: {alert.current_stop}"
     body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
 
+    # Save to local SQLite database
     database.save_alert(subject, body, alert.location or alert.current_stop)
-    bg.add_task(publish_to_configured_topics, subject, body)
+
+    # Push directly to Ntfy
+    send_ntfy(subject, body)
+
     return {"success": True}
 
 @app.post("/api/alerts/signup")
@@ -125,7 +120,7 @@ def signup_for_alerts(signup: AlertSignup):
     cursor.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", (signup.email.lower(),))
     conn.commit()
     conn.close()
-    publish_ntfy(NTFY_DRIVER_TOPIC, "New Van alert signup", f"{signup.name} signed up.")
+    send_ntfy("New Alert Signup", f"{signup.name} signed up for alerts.")
     return {"success": True}
 
 @app.post("/api/request-ride")
@@ -147,11 +142,7 @@ def request_ride(req: RideRequest):
     )
     conn.commit()
     conn.close()
-    publish_ntfy(
-        NTFY_DRIVER_TOPIC,
-        "New Ride Request",
-        f"{req.name} requested pickup at {req.pickup} to {req.dropoff} ({assigned_status})."
-    )
+    send_ntfy("New Ride Request", f"{req.name} requested pickup at {req.pickup} to {req.dropoff}.")
     return {"status": assigned_status}
 
 @app.post("/api/student/heading-to-van")
@@ -165,7 +156,7 @@ def heading_to_van(signup: AlertSignup):
     cursor.execute("INSERT INTO walking_to_van (user_id) VALUES (?)", (user_id,))
     conn.commit()
     conn.close()
-    publish_ntfy(NTFY_DRIVER_TOPIC, "Student Walking to Van", f"{signup.name} is on the way to the van.")
+    send_ntfy("Student Walking to Van", f"{signup.name} is on the way to the van.")
     return {"success": True}
 
 @app.post("/api/driver/clear-walking")
