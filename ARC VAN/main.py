@@ -3,8 +3,7 @@ import sqlite3
 import urllib.request
 import urllib.error
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 import database
@@ -55,7 +54,7 @@ class ButtonPress(BaseModel):
 def publish_ntfy(topic: str, title: str, message: str) -> bool:
     if not topic:
         return False
-    header_title = title.encode("ascii", "ignore").decode("ascii") or "ARC Van notification"
+    header_title = title.encode("ascii", "ignore").decode("ascii") or "ARC Van Alert"
     request = urllib.request.Request(
         f"{NTFY_SERVER}/{topic}",
         data=message.encode("utf-8"),
@@ -64,9 +63,9 @@ def publish_ntfy(topic: str, title: str, message: str) -> bool:
     )
     try:
         with urllib.request.urlopen(request, timeout=8) as resp:
-            print(f"✅ [NTFY SUCCESS] Code {resp.status} sent to topic '{topic}'")
+            print(f"✅ [NTFY SUCCESS] {title} -> {topic}")
             return True
-    except (urllib.error.URLError, TimeoutError, UnicodeError) as error:
+    except Exception as error:
         print(f"❌ [NTFY FAILED] {error}")
         return False
 
@@ -80,7 +79,15 @@ def health():
     return {"status": "healthy"}
 
 @app.post("/api/button-press")
-def button_press(press: ButtonPress):
+def button_press(press: ButtonPress, bg: BackgroundTasks):
+    label = press.label.strip()[:100] or "Button Action"
+    view = press.view.strip() if press.view else "Navigation"
+    # Broadcast every button click directly to ntfy
+    bg.add_task(
+        publish_to_configured_topics,
+        f"🚐 Van Action: {label}",
+        f"Driver action selected in {view}: {label}"
+    )
     return {"success": True}
 
 @app.get("/api/alerts/latest")
@@ -104,11 +111,11 @@ def broadcast_alert(alert: AlertPayload, bg: BackgroundTasks):
     if alert.pin != DRIVER_PIN:
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
 
-    subject = alert.title or f"045/048 Van Alert: {alert.current_stop}"
-    body = alert.detail or f"Van is at {alert.current_stop}, departing in {alert.eta_mins} mins."
+    subject = alert.title or f"🚐 Van Location: {alert.current_stop}"
+    body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
 
     database.save_alert(subject, body, alert.location or alert.current_stop)
-    publish_to_configured_topics(subject, body)
+    bg.add_task(publish_to_configured_topics, subject, body)
     return {"success": True}
 
 @app.post("/api/alerts/signup")
@@ -140,7 +147,11 @@ def request_ride(req: RideRequest):
     )
     conn.commit()
     conn.close()
-    publish_ntfy(NTFY_DRIVER_TOPIC, "New Van ride request", f"{req.name} from {req.pickup} to {req.dropoff}.")
+    publish_ntfy(
+        NTFY_DRIVER_TOPIC,
+        "New Ride Request",
+        f"{req.name} requested pickup at {req.pickup} to {req.dropoff} ({assigned_status})."
+    )
     return {"status": assigned_status}
 
 @app.post("/api/student/heading-to-van")
@@ -154,7 +165,7 @@ def heading_to_van(signup: AlertSignup):
     cursor.execute("INSERT INTO walking_to_van (user_id) VALUES (?)", (user_id,))
     conn.commit()
     conn.close()
-    publish_ntfy(NTFY_DRIVER_TOPIC, "Student heading to Van", f"{signup.name} is on the way.")
+    publish_ntfy(NTFY_DRIVER_TOPIC, "Student Walking to Van", f"{signup.name} is on the way to the van.")
     return {"success": True}
 
 @app.post("/api/driver/clear-walking")
@@ -164,7 +175,6 @@ def clear_walking(payload: UpdateStatus):
     database.clear_walking_to_van()
     return {"success": True}
 
-# Static file serving
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
