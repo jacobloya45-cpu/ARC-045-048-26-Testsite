@@ -38,100 +38,31 @@ const ridePickupInput = document.querySelector('#ride-pickup');
 const otherPickup = document.querySelector('#other-pickup');
 const otherPickupInput = document.querySelector('#other-pickup-input');
 const driverPin = '045048';
-const ntfyUrl = 'https://ntfy.sh/arc-van-fort-knox-045048';
 const driverRequestList = document.querySelector('#driver-request-list');
 
 let latestStudentAlertId = 0;
 let currentVanLocation = '';
 let accessGrants = loadAccessGrants();
-const ntfyUrl = 'https://ntfy.sh/ViylM4A5cfMQgIYQ';
+const ntfyUrl = 'https://ntfy.sh/arc-van-fort-knox-045048';
 
-function isDriverAuthenticated() {
-  return sessionStorage.getItem(driverAuthKey) === 'true';
-}
-
-function setDriverAuthenticated(val) {
-  if (val) sessionStorage.setItem(driverAuthKey, 'true'); 
-  else sessionStorage.removeItem(driverAuthKey);
+function displayVanName(text) {
+  return (text || '').replace(/Van 02|VAN 02/g, '045/048 Van');
 }
 
 function updateDriverControls() {
   const driverView = document.querySelector('#driver-view');
   if (!driverView) return;
   const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn, #access-form button, #driver-name, #driver-email');
-  const enabled = isDriverAuthenticated();
   controls.forEach((el) => {
-    try { el.disabled = !enabled; } catch (e) {}
-    el.classList.toggle('locked', !enabled);
+    try { el.disabled = false; } catch (e) {}
+    el.classList.remove('locked');
   });
-}
-
-function showPinModal(message) {
-  const modal = document.querySelector('#driver-pin-modal');
-  if (!modal) return;
-  modal.classList.add('visible');
-  modal.setAttribute('aria-hidden', 'false');
-  const err = modal.querySelector('.pin-error');
-  if (err) err.textContent = message || '';
-  const input = modal.querySelector('.pin-input');
-  if (input) { input.value = ''; input.focus(); }
-}
-
-function hidePinModal() {
-  const modal = document.querySelector('#driver-pin-modal');
-  if (!modal) return;
-  modal.classList.remove('visible');
-  modal.setAttribute('aria-hidden', 'true');
 }
 
 window.addEventListener('load', () => {
+  switchView('student');
   updateDriverControls();
-  
-  document.querySelectorAll('[data-view]').forEach((button) => {
-    button.addEventListener('click', () => {
-      if (button.dataset.view === 'driver' && !isDriverAuthenticated()) {
-        showPinModal('Enter driver PIN to unlock console');
-      }
-    });
-  });
-
-  const modal = document.querySelector('#driver-pin-modal');
-  if (modal) {
-    modal.querySelector('.pin-submit').addEventListener('click', () => {
-      const val = modal.querySelector('.pin-input').value.trim();
-      if (val === driverPin) {
-        setDriverAuthenticated(true);
-        hidePinModal();
-        updateDriverControls();
-        showToast('Driver console unlocked');
-      } else {
-        modal.querySelector('.pin-error').textContent = 'Invalid PIN';
-        modal.querySelector('.pin-input').focus();
-      }
-    });
-    modal.querySelector('.pin-cancel').addEventListener('click', () => { hidePinModal(); });
-    modal.querySelector('.pin-input').addEventListener('keydown', (e) => { 
-      if (e.key === 'Enter') modal.querySelector('.pin-submit').click(); 
-    });
-  }
-
-  const driverView = document.querySelector('#driver-view');
-  if (driverView) {
-    driverView.addEventListener('click', (e) => {
-      if (isDriverAuthenticated()) return;
-      const target = e.target.closest('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn, #access-form button');
-      if (target) {
-        e.preventDefault();
-        e.stopPropagation();
-        showPinModal('Driver PIN required');
-      }
-    }, true);
-  }
 });
-
-function displayVanName(text) {
-  return (text || '').replace(/Van 02|VAN 02/g, '045/048 Van');
-}
 
 if (ntfyDriverQr) ntfyDriverQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(ntfyUrl)}`;
 if (ntfyStudentQr) ntfyStudentQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(ntfyUrl)}`;
@@ -155,11 +86,10 @@ async function sendDriverAlert(title, detail, toastMessage, location = null) {
     if (!response.ok) throw new Error('Alert failed');
     showToast(toastMessage);
   } catch (err) {
-    showToast('Failed to post alert to Ntfy');
+    showToast('Alert broadcast error');
   }
 }
 
-// Step 1 - Choose Where Van is Now (Broadcasts instantly upon button click)
 function showDestinationStep(location) {
   currentVanLocation = location;
   const prompt = document.querySelector('#location-prompt');
@@ -169,7 +99,6 @@ function showDestinationStep(location) {
   const otherLoc = document.querySelector('#other-location');
   if (otherLoc) otherLoc.classList.remove('visible');
 
-  // Immediately send location update to Ntfy
   sendDriverAlert(
     `🚐 Van Location: ${location}`,
     `045/048 Van is currently at ${location}.`,
@@ -194,7 +123,6 @@ function resetLocationWorkflow() {
   if (otherDestInput) otherDestInput.value = '';
 }
 
-// Step 2 - Send destination update
 function sendLocationUpdate(destination) {
   const currentLocation = currentVanLocation || 'Van Route';
   sendDriverAlert(
@@ -265,7 +193,6 @@ if (sendDestOtherBtn) {
   });
 }
 
-// Departure alert button
 if (departureAlertButton) {
   departureAlertButton.addEventListener('click', () => {
     const activeOption = document.querySelector('.departure-option.active');
@@ -281,7 +208,6 @@ if (departureAlertButton) {
   });
 }
 
-// Availability buttons
 if (vanFullReturnButton) {
   vanFullReturnButton.addEventListener('click', () => {
     sendDriverAlert(
@@ -320,6 +246,10 @@ function switchView(view) {
   const targetView = document.querySelector(`#${view}-view`);
   if (targetView) targetView.classList.add('active-view');
   document.querySelectorAll('[data-view]').forEach((button) => button.classList.toggle('active', button.dataset.view === view));
+  const pageTitle = document.querySelector('#page-title');
+  if (pageTitle) {
+    pageTitle.innerHTML = view === 'driver' ? 'Monitor the App and be Accurate <span>✦</span>' : 'Your ride, on your time <span>✦</span>';
+  }
 }
 
 document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
