@@ -14,6 +14,8 @@ const vanFullReturnButton = document.querySelector('#van-full-return-btn');
 const noRidesButton = document.querySelector('#no-rides-btn');
 const headingToVanForm = document.querySelector('#heading-to-van-form');
 const driverRequestList = document.querySelector('#driver-request-list');
+const driverWalkerList = document.querySelector('#driver-walker-list');
+const clearAllWalkersBtn = document.querySelector('#clear-all-walkers-btn');
 
 const driverAppQr = document.querySelector('#driver-app-qr');
 const studentAppQr = document.querySelector('#student-app-qr');
@@ -27,7 +29,6 @@ let currentVanLocation = '';
 let studentSelectedPickup = '';
 let socket = null;
 
-// QR Code Setup
 function initQRCodes() {
   const currentUrl = window.location.origin;
   const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(currentUrl)}`;
@@ -38,7 +39,6 @@ function initQRCodes() {
   if (studentQrUrl) studentQrUrl.textContent = currentUrl;
 }
 
-// Authentication
 function isDriverAuthenticated() {
   return sessionStorage.getItem(driverAuthKey) === 'true';
 }
@@ -60,7 +60,7 @@ function setDriverAuthenticated(token, pin) {
 function updateDriverControls() {
   const driverView = document.querySelector('#driver-view');
   if (!driverView) return;
-  const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn');
+  const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn, #clear-all-walkers-btn');
   const authed = isDriverAuthenticated();
   controls.forEach((el) => {
     try { el.disabled = !authed; } catch (e) {}
@@ -86,7 +86,6 @@ function hidePinModal() {
   modal.setAttribute('aria-hidden', 'true');
 }
 
-// Audio tone
 function playAlertTone() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -104,7 +103,6 @@ function playAlertTone() {
   } catch (e) {}
 }
 
-// WebSocket Connection
 function initWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/alerts`;
@@ -122,8 +120,13 @@ function initWebSocket() {
         renderReceivedAlert(data.alert);
       } else if (data.type === 'REQUESTS_UPDATED') {
         renderDriverRequests(data.requests || []);
-      } else if (data.type === 'WALKING_UPDATE') {
+      } else if (data.type === 'WALKERS_UPDATED') {
         if (walkingCount) walkingCount.innerHTML = `${data.count} <small>students</small>`;
+        renderDriverWalkers(data.walkers || []);
+        if (data.new_name) {
+          playAlertTone();
+          showToast(`🚶 Incoming: ${data.new_name} is walking to the van!`);
+        }
       } else if (data.type === 'NEW_RIDE_REQUEST') {
         showToast(`🚖 New Ride Request: ${data.name} (${data.pickup} → ${data.dropoff})`);
       }
@@ -221,7 +224,7 @@ window.addEventListener('load', () => {
   if (driverView) {
     driverView.addEventListener('click', (e) => {
       if (isDriverAuthenticated()) return;
-      const target = e.target.closest('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn');
+      const target = e.target.closest('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, #clear-all-walkers-btn');
       if (target) {
         e.preventDefault();
         e.stopPropagation();
@@ -231,7 +234,6 @@ window.addEventListener('load', () => {
   }
 });
 
-// Driver Broadcast Action
 async function sendDriverAlert(title, detail, toastMessage, location = null) {
   try {
     const response = await fetch('/api/driver/broadcast', {
@@ -402,7 +404,6 @@ document.querySelectorAll('.departure-option').forEach((button) => button.addEve
   if (departureTime) departureTime.textContent = `${button.dataset.wait} min`;
 }));
 
-// --- STUDENT BUTTON RIDE REQUEST WORKFLOW ---
 function submitStudentRideRequest(pickup, dropoff) {
   const nameInput = document.querySelector('#student-rider-name');
   const name = nameInput ? nameInput.value.trim() : '';
@@ -435,7 +436,6 @@ function submitStudentRideRequest(pickup, dropoff) {
   });
 }
 
-// Student Step 1 Click
 document.querySelectorAll('.student-req-pickup-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.student-req-pickup-btn').forEach(b => b.classList.remove('active'));
@@ -460,7 +460,6 @@ document.querySelectorAll('.student-req-pickup-btn').forEach((btn) => {
   });
 });
 
-// Student Step 1 Custom
 const setOtherPickupBtn = document.querySelector('#student-set-other-pickup');
 if (setOtherPickupBtn) {
   setOtherPickupBtn.addEventListener('click', () => {
@@ -478,7 +477,6 @@ if (setOtherPickupBtn) {
   });
 }
 
-// Student Step 2 Click
 document.querySelectorAll('.student-req-dropoff-btn').forEach((btn) => {
   btn.addEventListener('click', () => {
     const dropoffLoc = btn.dataset.loc;
@@ -495,7 +493,6 @@ document.querySelectorAll('.student-req-dropoff-btn').forEach((btn) => {
   });
 });
 
-// Student Step 2 Custom
 const sendCustomRideBtn = document.querySelector('#student-send-custom-ride');
 if (sendCustomRideBtn) {
   sendCustomRideBtn.addEventListener('click', () => {
@@ -509,7 +506,7 @@ if (sendCustomRideBtn) {
   });
 }
 
-// Heading to van notification
+// Student Notification when walking to van
 if (headingToVanForm) {
   headingToVanForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -523,8 +520,19 @@ if (headingToVanForm) {
     }).then(() => {
       headingToVanForm.reset();
       showToast("Driver notified you're heading to the van!");
-      updateWalkingCount();
     });
+  });
+}
+
+// Clear all walkers button action
+if (clearAllWalkersBtn) {
+  clearAllWalkersBtn.addEventListener('click', () => {
+    if (!isDriverAuthenticated()) return;
+    fetch('/api/driver/clear-walking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pin: getStoredDriverPin(), request_id: 0, new_status: '' })
+    }).then(() => showToast('All incoming walkers cleared'));
   });
 }
 
@@ -546,18 +554,37 @@ function switchView(view) {
   }
 }
 
-function updateWalkingCount() {
-  fetch('/api/status', { cache: 'no-store' })
-    .then((res) => res.json())
-    .then((data) => {
-      if (data.walking_count !== undefined && walkingCount) {
-        walkingCount.innerHTML = `${data.walking_count} <small>students</small>`;
-      }
-    })
-    .catch(() => {});
+// Render Incoming Walkers Manifest on Driver Console
+function renderDriverWalkers(walkers) {
+  if (!driverWalkerList) return;
+  if (!walkers || !walkers.length) {
+    driverWalkerList.innerHTML = '<p class="access-empty">No students currently walking to the van.</p>';
+    return;
+  }
+
+  driverWalkerList.innerHTML = walkers.map((walker) => `
+    <div class="driver-request-entry" style="border-left: 3px solid var(--coral); padding-left: 10px;">
+      <div class="request-avatar" style="background:#fbe3db; color:var(--coral);">${(walker.name || '?').slice(0, 2).toUpperCase()}</div>
+      <div class="driver-request-info">
+        <strong>${walker.name}</strong>
+        <span>Status: <b>Walking to van right now</b></span>
+      </div>
+      <button class="primary-btn arrive-walker-btn" data-walkerid="${walker.id}" style="padding: 6px 10px; font-size: 11px; margin-left: auto; background: var(--mint-deep);">Boarded / Arrived</button>
+    </div>
+  `).join('');
+
+  driverWalkerList.querySelectorAll('.arrive-walker-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const walkerId = btn.dataset.walkerid;
+      fetch('/api/driver/remove-walker', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: getStoredDriverPin(), walker_id: parseInt(walkerId, 10) })
+      }).then(() => showToast('Student marked arrived'));
+    });
+  });
 }
 
-// Render driver requests with active count and manual pickup button
 function renderDriverRequests(requests) {
   if (!driverRequestList) return;
   if (waitingCount) waitingCount.innerHTML = `${requests.length} <small>students</small>`;
@@ -578,7 +605,6 @@ function renderDriverRequests(requests) {
     </div>
   `).join('');
 
-  // Attach completion listener for each item
   driverRequestList.querySelectorAll('.complete-request-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const reqId = btn.dataset.reqid;
@@ -598,7 +624,24 @@ function pollDriverRequests() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pin: getStoredDriverPin() }),
     cache: 'no-store'
-  }).then((res) => res.json()).then((data) => renderDriverRequests(data.requests || [])).catch(() => {});
+  })
+  .then((res) => res.json())
+  .then((data) => {
+    renderDriverRequests(data.requests || []);
+    renderDriverWalkers(data.walkers || []);
+    if (walkingCount && data.walkers) {
+      walkingCount.innerHTML = `${data.walkers.length} <small>students</small>`;
+    }
+  })
+  .catch(() => {});
 }
 
-updateWalkingCount();
+fetch('/api/status', { cache: 'no-store' })
+  .then((res) => res.json())
+  .then((data) => {
+    if (data.walking_count !== undefined && walkingCount) {
+      walkingCount.innerHTML = `${data.walking_count} <small>students</small>`;
+    }
+    if (data.walkers) renderDriverWalkers(data.walkers);
+  })
+  .catch(() => {});
