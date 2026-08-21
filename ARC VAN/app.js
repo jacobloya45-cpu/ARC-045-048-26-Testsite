@@ -13,14 +13,55 @@ const studentVanLocationTime = document.querySelector('#student-van-location-tim
 const vanFullReturnButton = document.querySelector('#van-full-return-btn');
 const noRidesButton = document.querySelector('#no-rides-btn');
 const headingToVanForm = document.querySelector('#heading-to-van-form');
-const driverPin = '045048';
 const driverRequestList = document.querySelector('#driver-request-list');
+
+const driverPin = '045048';
+const driverAuthKey = 'arc-van-driver-auth';
 
 let currentVanLocation = '';
 let studentSelectedPickup = '';
 let socket = null;
 
-// Native ding sound
+// --- AUTHENTICATION HELPERS ---
+function isDriverAuthenticated() {
+  return sessionStorage.getItem(driverAuthKey) === 'true';
+}
+
+function setDriverAuthenticated(val) {
+  if (val) sessionStorage.setItem(driverAuthKey, 'true');
+  else sessionStorage.removeItem(driverAuthKey);
+}
+
+function updateDriverControls() {
+  const driverView = document.querySelector('#driver-view');
+  if (!driverView) return;
+  const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn');
+  const authed = isDriverAuthenticated();
+  controls.forEach((el) => {
+    try { el.disabled = !authed; } catch (e) {}
+    el.classList.toggle('locked', !authed);
+  });
+}
+
+function showPinModal(message) {
+  const modal = document.querySelector('#driver-pin-modal');
+  if (!modal) return;
+  modal.classList.add('visible');
+  modal.setAttribute('aria-hidden', 'false');
+  const err = modal.querySelector('.pin-error');
+  if (err) err.textContent = message || '';
+  const input = modal.querySelector('.pin-input');
+  if (input) { input.value = ''; input.focus(); }
+}
+
+function hidePinModal() {
+  const modal = document.querySelector('#driver-pin-modal');
+  if (!modal) return;
+  modal.classList.remove('visible');
+  modal.setAttribute('aria-hidden', 'true');
+}
+
+// Audio ding
 function playAlertTone() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -57,7 +98,7 @@ function initWebSocket() {
       } else if (data.type === 'WALKING_UPDATE') {
         if (walkingCount) walkingCount.innerHTML = `${data.count} <small>students</small>`;
       } else if (data.type === 'NEW_RIDE_REQUEST') {
-        pollDriverRequests();
+        if (isDriverAuthenticated()) pollDriverRequests();
         showToast(`🚖 New Ride: ${data.name} (${data.pickup} → ${data.dropoff})`);
       }
     } catch (err) {
@@ -93,21 +134,63 @@ function displayVanName(text) {
   return (text || '').replace(/Van 02|VAN 02/g, '045/048 Van');
 }
 
-function updateDriverControls() {
-  const driverView = document.querySelector('#driver-view');
-  if (!driverView) return;
-  const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn');
-  controls.forEach((el) => {
-    try { el.disabled = false; } catch (e) {}
-    el.classList.remove('locked');
-  });
-}
-
 window.addEventListener('load', () => {
   switchView('student');
   updateDriverControls();
   initWebSocket();
-  pollDriverRequests();
+
+  // Wire up view buttons to check PIN for driver mode
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    button.addEventListener('click', () => {
+      if (button.dataset.view === 'driver' && !isDriverAuthenticated()) {
+        showPinModal('Enter driver PIN (045048) to unlock');
+      } else {
+        switchView(button.dataset.view);
+      }
+    });
+  });
+
+  // Modal actions
+  const modal = document.querySelector('#driver-pin-modal');
+  if (modal) {
+    modal.querySelector('.pin-submit').addEventListener('click', () => {
+      const val = modal.querySelector('.pin-input').value.trim();
+      if (val === driverPin) {
+        setDriverAuthenticated(true);
+        hidePinModal();
+        updateDriverControls();
+        switchView('driver');
+        pollDriverRequests();
+        showToast('Driver console unlocked');
+      } else {
+        modal.querySelector('.pin-error').textContent = 'Invalid PIN. Access denied.';
+        modal.querySelector('.pin-input').focus();
+      }
+    });
+
+    modal.querySelector('.pin-cancel').addEventListener('click', () => {
+      hidePinModal();
+      switchView('student');
+    });
+
+    modal.querySelector('.pin-input').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') modal.querySelector('.pin-submit').click();
+    });
+  }
+
+  // Intercept locked driver view clicks
+  const driverView = document.querySelector('#driver-view');
+  if (driverView) {
+    driverView.addEventListener('click', (e) => {
+      if (isDriverAuthenticated()) return;
+      const target = e.target.closest('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn');
+      if (target) {
+        e.preventDefault();
+        e.stopPropagation();
+        showPinModal('Driver PIN required');
+      }
+    }, true);
+  }
 });
 
 // --- DRIVER BROADCAST ACTIONS ---
@@ -176,7 +259,8 @@ function sendLocationUpdate(destination) {
   ).then(resetLocationWorkflow);
 }
 
-document.querySelectorAll('.location-btn:not(.student-req-pickup-btn)').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('#driver-view .location-btn').forEach((button) => button.addEventListener('click', () => {
+  if (!isDriverAuthenticated()) return;
   const otherLocation = document.querySelector('#other-location');
   if (button.dataset.location === 'Other') {
     if (otherLocation) {
@@ -194,6 +278,7 @@ document.querySelectorAll('.location-btn:not(.student-req-pickup-btn)').forEach(
 const sendOtherAlertBtn = document.querySelector('#send-other-alert');
 if (sendOtherAlertBtn) {
   sendOtherAlertBtn.addEventListener('click', () => {
+    if (!isDriverAuthenticated()) return;
     const input = document.querySelector('#other-location-input');
     const location = input ? input.value.trim() : '';
     if (!location) {
@@ -204,7 +289,8 @@ if (sendOtherAlertBtn) {
   });
 }
 
-document.querySelectorAll('.destination-btn:not(.student-req-dropoff-btn)').forEach((button) => button.addEventListener('click', () => {
+document.querySelectorAll('#driver-view .destination-btn').forEach((button) => button.addEventListener('click', () => {
+  if (!isDriverAuthenticated()) return;
   const otherDestination = document.querySelector('#other-destination');
   if (button.dataset.location === 'Other') {
     if (otherDestination) {
@@ -222,6 +308,7 @@ document.querySelectorAll('.destination-btn:not(.student-req-dropoff-btn)').forE
 const sendDestOtherBtn = document.querySelector('#send-destination-other');
 if (sendDestOtherBtn) {
   sendDestOtherBtn.addEventListener('click', () => {
+    if (!isDriverAuthenticated()) return;
     const input = document.querySelector('#other-destination-input');
     const destination = input ? input.value.trim() : '';
     if (!destination) {
@@ -234,6 +321,7 @@ if (sendDestOtherBtn) {
 
 if (departureAlertButton) {
   departureAlertButton.addEventListener('click', () => {
+    if (!isDriverAuthenticated()) return;
     const activeOption = document.querySelector('.departure-option.active');
     const waitTime = activeOption ? activeOption.dataset.wait : '5';
     const departure = new Date(Date.now() + Number(waitTime) * 60000);
@@ -249,6 +337,7 @@ if (departureAlertButton) {
 
 if (vanFullReturnButton) {
   vanFullReturnButton.addEventListener('click', () => {
+    if (!isDriverAuthenticated()) return;
     sendDriverAlert(
       '045/048 Van is currently full',
       'The van is at capacity. The driver will return shortly for more rides.',
@@ -259,6 +348,7 @@ if (vanFullReturnButton) {
 
 if (noRidesButton) {
   noRidesButton.addEventListener('click', () => {
+    if (!isDriverAuthenticated()) return;
     sendDriverAlert(
       'No rides available right now',
       'Service is paused. Please check back later for the next available ride.',
@@ -268,6 +358,7 @@ if (noRidesButton) {
 }
 
 document.querySelectorAll('.departure-option').forEach((button) => button.addEventListener('click', () => {
+  if (!isDriverAuthenticated()) return;
   document.querySelectorAll('.departure-option').forEach((option) => option.classList.remove('active'));
   button.classList.add('active');
   if (departureTime) departureTime.textContent = `${button.dataset.wait} min`;
@@ -292,7 +383,6 @@ function submitStudentRideRequest(pickup, dropoff) {
   .then((res) => res.json())
   .then((data) => {
     showToast(`🚖 Ride Requested: Pickup at ${pickup} → ${dropoff}`);
-    // Reset student workflow
     studentSelectedPickup = '';
     const dropoffSection = document.querySelector('#student-dropoff-step');
     if (dropoffSection) dropoffSection.classList.remove('visible');
@@ -417,8 +507,6 @@ function switchView(view) {
     pageTitle.innerHTML = view === 'driver' ? 'Monitor the App and be Accurate <span>✦</span>' : 'Your ride, on your time <span>✦</span>';
   }
 }
-
-document.querySelectorAll('[data-view]').forEach((button) => button.addEventListener('click', () => switchView(button.dataset.view)));
 
 function updateWalkingCount() {
   fetch('/api/status', { cache: 'no-store' })
