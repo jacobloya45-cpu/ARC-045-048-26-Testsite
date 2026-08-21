@@ -15,12 +15,28 @@ const noRidesButton = document.querySelector('#no-rides-btn');
 const headingToVanForm = document.querySelector('#heading-to-van-form');
 const driverRequestList = document.querySelector('#driver-request-list');
 
+const driverAppQr = document.querySelector('#driver-app-qr');
+const studentAppQr = document.querySelector('#student-app-qr');
+const driverQrUrl = document.querySelector('.driver-qr-url');
+const studentQrUrl = document.querySelector('.student-qr-url');
+
 const driverAuthKey = 'arc-van-driver-auth';
 const driverPinKey = 'arc-van-driver-token';
 
 let currentVanLocation = '';
 let studentSelectedPickup = '';
 let socket = null;
+
+// Generate Dynamic App QR Codes pointing to live site URL
+function initQRCodes() {
+  const currentUrl = window.location.origin;
+  const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(currentUrl)}`;
+
+  if (driverAppQr) driverAppQr.src = qrApiUrl;
+  if (studentAppQr) studentAppQr.src = qrApiUrl;
+  if (driverQrUrl) driverQrUrl.textContent = currentUrl;
+  if (studentQrUrl) studentQrUrl.textContent = currentUrl;
+}
 
 // --- SERVER-SIDE AUTHENTICATION HELPERS ---
 function isDriverAuthenticated() {
@@ -147,6 +163,7 @@ window.addEventListener('load', () => {
   switchView('student');
   updateDriverControls();
   initWebSocket();
+  initQRCodes();
 
   document.querySelectorAll('[data-view]').forEach((button) => {
     button.addEventListener('click', () => {
