@@ -8,10 +8,15 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
             email TEXT UNIQUE NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    user_cols = {row[1] for row in cursor.execute("PRAGMA table_info(users)").fetchall()}
+    if "name" not in user_cols:
+        cursor.execute("ALTER TABLE users ADD COLUMN name TEXT")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -35,6 +40,7 @@ def init_db():
     alert_columns = {row[1] for row in cursor.execute("PRAGMA table_info(alerts)").fetchall()}
     if "location" not in alert_columns:
         cursor.execute("ALTER TABLE alerts ADD COLUMN location TEXT")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS walking_to_van (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -69,7 +75,7 @@ def get_queue_data():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT r.id, u.email, r.pickup, r.dropoff, r.status 
+        SELECT r.id, COALESCE(u.name, u.email), r.pickup, r.dropoff, r.status, r.timestamp
         FROM requests r
         JOIN users u ON r.user_id = u.id
         WHERE r.status IN ('CONFIRMED', 'WAITLIST', 'BOARDED')
@@ -81,6 +87,30 @@ def get_queue_data():
     confirmed = [r for r in rows if r[4] in ('CONFIRMED', 'BOARDED')]
     waitlist = [r for r in rows if r[4] == 'WAITLIST']
     return {"manifest": rows, "active_count": len(confirmed), "waitlist_count": len(waitlist)}
+
+def clear_requests_at_location(location: str):
+    """Mark all active requests at this pickup stop as COMPLETED"""
+    if not location:
+        return 0
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE requests 
+        SET status = 'COMPLETED' 
+        WHERE LOWER(TRIM(pickup)) = LOWER(TRIM(?)) AND status IN ('CONFIRMED', 'WAITLIST', 'BOARDED')
+    """, (location,))
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected
+
+def complete_single_request(request_id: int):
+    """Mark an individual request as COMPLETED"""
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE requests SET status = 'COMPLETED' WHERE id = ?", (request_id,))
+    conn.commit()
+    conn.close()
 
 def add_walking_to_van(user_id):
     conn = sqlite3.connect(DB_NAME)
@@ -103,4 +133,3 @@ def clear_walking_to_van():
     cursor.execute("DELETE FROM walking_to_van")
     conn.commit()
     conn.close()
-    
