@@ -1,7 +1,6 @@
 const requestList = document.querySelector('#request-list');
 const waitingCount = document.querySelector('#waiting-count');
 const walkingCount = document.querySelector('#walking-count');
-const requestBadge = document.querySelector('#request-badge');
 const toast = document.querySelector('#toast');
 const departureTime = document.querySelector('#departure-time');
 const departureAlertButton = document.querySelector('#departure-alert-btn');
@@ -13,30 +12,15 @@ const studentVanLocation = document.querySelector('#student-van-location');
 const studentVanLocationTime = document.querySelector('#student-van-location-time');
 const vanFullReturnButton = document.querySelector('#van-full-return-btn');
 const noRidesButton = document.querySelector('#no-rides-btn');
-const accessForm = document.querySelector('#access-form');
-const accessHistory = document.querySelector('#access-history');
-const accessCount = document.querySelector('#access-count');
-const accessFormMessage = document.querySelector('#access-form-message');
-const accessStorageKey = 'arc-van-driver-access';
-const studentSignupForm = document.querySelector('#student-signup-form');
-const signupMessage = document.querySelector('#signup-message');
-const signupStorageKey = 'arc-van-alert-signups';
 const headingToVanForm = document.querySelector('#heading-to-van-form');
-const headingMessage = document.querySelector('#heading-message');
-const rideRequestForm = document.querySelector('#ride-request-form');
-const rideRequestMessage = document.querySelector('#ride-request-message');
-const ridePickupInput = document.querySelector('#ride-pickup');
-const otherPickup = document.querySelector('#other-pickup');
-const otherPickupInput = document.querySelector('#other-pickup-input');
 const driverPin = '045048';
 const driverRequestList = document.querySelector('#driver-request-list');
 
-let latestStudentAlertId = 0;
 let currentVanLocation = '';
-let accessGrants = loadAccessGrants();
+let studentSelectedPickup = '';
 let socket = null;
 
-// Audio context for native ding sound
+// Native ding sound
 function playAlertTone() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -45,8 +29,8 @@ function playAlertTone() {
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
-    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1);
     gain.gain.setValueAtTime(0.15, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
     osc.start();
@@ -54,7 +38,7 @@ function playAlertTone() {
   } catch (e) {}
 }
 
-// --- Native WebSocket Connection ---
+// WebSocket Connection
 function initWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/alerts`;
@@ -74,7 +58,7 @@ function initWebSocket() {
         if (walkingCount) walkingCount.innerHTML = `${data.count} <small>students</small>`;
       } else if (data.type === 'NEW_RIDE_REQUEST') {
         pollDriverRequests();
-        showToast(`New Ride: ${data.name} (${data.pickup} → ${data.dropoff})`);
+        showToast(`🚖 New Ride: ${data.name} (${data.pickup} → ${data.dropoff})`);
       }
     } catch (err) {
       console.error('Socket message parse error', err);
@@ -82,7 +66,6 @@ function initWebSocket() {
   };
 
   socket.onclose = () => {
-    console.log('⚠️ WebSocket disconnected. Reconnecting in 2s...');
     setTimeout(initWebSocket, 2000);
   };
 }
@@ -113,7 +96,7 @@ function displayVanName(text) {
 function updateDriverControls() {
   const driverView = document.querySelector('#driver-view');
   if (!driverView) return;
-  const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn, #access-form button, #driver-name, #driver-email');
+  const controls = driverView.querySelectorAll('.location-btn, .destination-btn, #send-other-alert, #send-destination-other, #announce-btn, .departure-option, #departure-alert-btn, #van-full-return-btn, #no-rides-btn, .request-alert-btn');
   controls.forEach((el) => {
     try { el.disabled = false; } catch (e) {}
     el.classList.remove('locked');
@@ -124,8 +107,10 @@ window.addEventListener('load', () => {
   switchView('student');
   updateDriverControls();
   initWebSocket();
+  pollDriverRequests();
 });
 
+// --- DRIVER BROADCAST ACTIONS ---
 async function sendDriverAlert(title, detail, toastMessage, location = null) {
   try {
     const response = await fetch('/api/driver/broadcast', {
@@ -191,8 +176,7 @@ function sendLocationUpdate(destination) {
   ).then(resetLocationWorkflow);
 }
 
-document.querySelectorAll('.location-btn').forEach((button) => button.addEventListener('click', () => {
-  resetDriverCounts();
+document.querySelectorAll('.location-btn:not(.student-req-pickup-btn)').forEach((button) => button.addEventListener('click', () => {
   const otherLocation = document.querySelector('#other-location');
   if (button.dataset.location === 'Other') {
     if (otherLocation) {
@@ -210,7 +194,6 @@ document.querySelectorAll('.location-btn').forEach((button) => button.addEventLi
 const sendOtherAlertBtn = document.querySelector('#send-other-alert');
 if (sendOtherAlertBtn) {
   sendOtherAlertBtn.addEventListener('click', () => {
-    resetDriverCounts();
     const input = document.querySelector('#other-location-input');
     const location = input ? input.value.trim() : '';
     if (!location) {
@@ -221,8 +204,7 @@ if (sendOtherAlertBtn) {
   });
 }
 
-document.querySelectorAll('.destination-btn').forEach((button) => button.addEventListener('click', () => {
-  resetDriverCounts();
+document.querySelectorAll('.destination-btn:not(.student-req-dropoff-btn)').forEach((button) => button.addEventListener('click', () => {
   const otherDestination = document.querySelector('#other-destination');
   if (button.dataset.location === 'Other') {
     if (otherDestination) {
@@ -240,7 +222,6 @@ document.querySelectorAll('.destination-btn').forEach((button) => button.addEven
 const sendDestOtherBtn = document.querySelector('#send-destination-other');
 if (sendDestOtherBtn) {
   sendDestOtherBtn.addEventListener('click', () => {
-    resetDriverCounts();
     const input = document.querySelector('#other-destination-input');
     const destination = input ? input.value.trim() : '';
     if (!destination) {
@@ -292,6 +273,133 @@ document.querySelectorAll('.departure-option').forEach((button) => button.addEve
   if (departureTime) departureTime.textContent = `${button.dataset.wait} min`;
 }));
 
+// --- STUDENT BUTTON RIDE REQUEST WORKFLOW ---
+function submitStudentRideRequest(pickup, dropoff) {
+  const nameInput = document.querySelector('#student-rider-name');
+  const name = nameInput ? nameInput.value.trim() : '';
+  
+  if (!name) {
+    showToast('⚠️ Please enter your name first!');
+    if (nameInput) nameInput.focus();
+    return;
+  }
+
+  fetch('/api/request-ride', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name, pickup: pickup, dropoff: dropoff })
+  })
+  .then((res) => res.json())
+  .then((data) => {
+    showToast(`🚖 Ride Requested: Pickup at ${pickup} → ${dropoff}`);
+    // Reset student workflow
+    studentSelectedPickup = '';
+    const dropoffSection = document.querySelector('#student-dropoff-step');
+    if (dropoffSection) dropoffSection.classList.remove('visible');
+    const otherPickupBox = document.querySelector('#student-other-pickup-box');
+    if (otherPickupBox) otherPickupBox.classList.remove('visible');
+    const otherDropoffBox = document.querySelector('#student-other-dropoff-box');
+    if (otherDropoffBox) otherDropoffBox.classList.remove('visible');
+    document.querySelectorAll('.student-req-pickup-btn').forEach(b => b.classList.remove('active'));
+  })
+  .catch(() => {
+    showToast('Error requesting ride.');
+  });
+}
+
+// Student Step 1 Click
+document.querySelectorAll('.student-req-pickup-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.student-req-pickup-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const loc = btn.dataset.loc;
+    const otherBox = document.querySelector('#student-other-pickup-box');
+    const dropoffStep = document.querySelector('#student-dropoff-step');
+    const prompt = document.querySelector('#student-dropoff-prompt');
+
+    if (loc === 'Other') {
+      if (otherBox) otherBox.classList.add('visible');
+      if (dropoffStep) dropoffStep.classList.remove('visible');
+      const input = document.querySelector('#student-other-pickup-input');
+      if (input) input.focus();
+    } else {
+      if (otherBox) otherBox.classList.remove('visible');
+      studentSelectedPickup = loc;
+      if (prompt) prompt.textContent = `STEP 2: WHERE DO YOU NEED TO GO? (Pickup selected: ${loc})`;
+      if (dropoffStep) dropoffStep.classList.add('visible');
+    }
+  });
+});
+
+// Student Step 1 Custom
+const setOtherPickupBtn = document.querySelector('#student-set-other-pickup');
+if (setOtherPickupBtn) {
+  setOtherPickupBtn.addEventListener('click', () => {
+    const input = document.querySelector('#student-other-pickup-input');
+    const loc = input ? input.value.trim() : '';
+    if (!loc) {
+      if (input) input.focus();
+      return;
+    }
+    studentSelectedPickup = loc;
+    const prompt = document.querySelector('#student-dropoff-prompt');
+    const dropoffStep = document.querySelector('#student-dropoff-step');
+    if (prompt) prompt.textContent = `STEP 2: WHERE DO YOU NEED TO GO? (Pickup selected: ${loc})`;
+    if (dropoffStep) dropoffStep.classList.add('visible');
+  });
+}
+
+// Student Step 2 Click
+document.querySelectorAll('.student-req-dropoff-btn').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    const dropoffLoc = btn.dataset.loc;
+    const otherDropoffBox = document.querySelector('#student-other-dropoff-box');
+
+    if (dropoffLoc === 'Other') {
+      if (otherDropoffBox) otherDropoffBox.classList.add('visible');
+      const input = document.querySelector('#student-other-dropoff-input');
+      if (input) input.focus();
+    } else {
+      if (otherDropoffBox) otherDropoffBox.classList.remove('visible');
+      submitStudentRideRequest(studentSelectedPickup || 'Campus', dropoffLoc);
+    }
+  });
+});
+
+// Student Step 2 Custom
+const sendCustomRideBtn = document.querySelector('#student-send-custom-ride');
+if (sendCustomRideBtn) {
+  sendCustomRideBtn.addEventListener('click', () => {
+    const input = document.querySelector('#student-other-dropoff-input');
+    const dropoff = input ? input.value.trim() : '';
+    if (!dropoff) {
+      if (input) input.focus();
+      return;
+    }
+    submitStudentRideRequest(studentSelectedPickup || 'Campus', dropoff);
+  });
+}
+
+// Student heading to van notification
+if (headingToVanForm) {
+  headingToVanForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = headingToVanForm.elements.name.value.trim();
+    const email = headingToVanForm.elements.email.value.trim().toLowerCase();
+    if (!name || !email) return;
+    fetch('/api/student/heading-to-van', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email })
+    }).then(() => {
+      headingToVanForm.reset();
+      showToast("Driver notified you're heading to the van!");
+      updateWalkingCount();
+    });
+  });
+}
+
 function showToast(message) {
   if (!toast) return;
   toast.textContent = message;
@@ -323,25 +431,6 @@ function updateWalkingCount() {
     .catch(() => {});
 }
 
-function resetDriverCounts() {
-  if (waitingCount) waitingCount.innerHTML = '0 <small>students</small>';
-  if (walkingCount) walkingCount.innerHTML = '0 <small>students</small>';
-  fetch('/api/driver/clear-walking', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pin: driverPin, request_id: 0, new_status: '' })
-  }).catch(() => {});
-}
-
-function loadAccessGrants() {
-  try {
-    const stored = JSON.parse(localStorage.getItem(accessStorageKey) || '[]');
-    return Array.isArray(stored) ? stored : [];
-  } catch {
-    return [];
-  }
-}
-
 function renderDriverRequests(requests) {
   if (!driverRequestList) return;
   driverRequestList.innerHTML = requests.length ? requests.map((request) => `
@@ -360,48 +449,5 @@ function pollDriverRequests() {
     cache: 'no-store'
   }).then((res) => res.json()).then((data) => renderDriverRequests(data.requests || [])).catch(() => {});
 }
-
-// Student form events
-if (headingToVanForm) {
-  headingToVanForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const name = headingToVanForm.elements.name.value.trim();
-    const email = headingToVanForm.elements.email.value.trim().toLowerCase();
-    if (!name || !email) return;
-    fetch('/api/student/heading-to-van', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, email })
-    }).then(() => {
-      headingToVanForm.reset();
-      showToast("Driver notified you're heading to the van!");
-      updateWalkingCount();
-    });
-  });
-}
-
-if (rideRequestForm) {
-  rideRequestForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const name = rideRequestForm.elements.name.value.trim();
-    const pickup = ridePickupInput ? ridePickupInput.value : '';
-    const dropoff = rideRequestForm.elements.dropoff.value.trim();
-    if (!name || !pickup || !dropoff) return;
-    fetch('/api/request-ride', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, pickup, dropoff })
-    }).then(() => {
-      rideRequestForm.reset();
-      showToast('Ride requested successfully!');
-    });
-  });
-}
-
-document.querySelectorAll('.student-stop-btn').forEach((button) => button.addEventListener('click', () => {
-  document.querySelectorAll('.student-stop-btn').forEach((stop) => stop.classList.remove('selected'));
-  button.classList.add('selected');
-  if (ridePickupInput) ridePickupInput.value = button.dataset.pickup;
-}));
 
 updateWalkingCount();
