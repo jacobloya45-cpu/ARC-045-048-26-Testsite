@@ -89,7 +89,6 @@ def get_queue_data():
     return {"manifest": rows, "active_count": len(confirmed), "waitlist_count": len(waitlist)}
 
 def clear_requests_at_location(location: str):
-    """Mark all active requests at this pickup stop as COMPLETED"""
     if not location:
         return 0
     conn = sqlite3.connect(DB_NAME)
@@ -105,31 +104,35 @@ def clear_requests_at_location(location: str):
     return affected
 
 def complete_single_request(request_id: int):
-    """Mark an individual request as COMPLETED"""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("UPDATE requests SET status = 'COMPLETED' WHERE id = ?", (request_id,))
     conn.commit()
     conn.close()
 
-def add_walking_to_van(user_id):
+def get_walking_list():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO walking_to_van (user_id) VALUES (?)", (user_id,))
-    conn.commit()
+    cursor.execute("""
+        SELECT w.id, COALESCE(u.name, u.email), w.created_at
+        FROM walking_to_van w
+        JOIN users u ON w.user_id = u.id
+        ORDER BY w.id ASC
+    """)
+    rows = cursor.fetchall()
     conn.close()
-
-def get_walking_count():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM walking_to_van")
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
+    return [{"id": r[0], "name": r[1], "time": r[2]} for r in rows]
 
 def clear_walking_to_van():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM walking_to_van")
+    conn.commit()
+    conn.close()
+
+def remove_single_walker(walker_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM walking_to_van WHERE id = ?", (walker_id,))
     conn.commit()
     conn.close()
