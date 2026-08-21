@@ -1,9 +1,3 @@
-const requests = [
-  { initials: 'AL', name: 'Avery Lee', pickup: 'North Gate', route: 'North Gate → Student Union', time: '4 min ago', tone: '' },
-  { initials: 'KS', name: 'Kai Santos', pickup: 'Library entrance', route: 'Library entrance → East Parking', time: '2 min ago', tone: 'yellow' },
-  { initials: 'MR', name: 'Maya Rivera', pickup: 'West Residences', route: 'West Residences → Arts Quad', time: 'Just now', tone: 'blue' }
-];
-
 const requestList = document.querySelector('#request-list');
 const waitingCount = document.querySelector('#waiting-count');
 const walkingCount = document.querySelector('#walking-count');
@@ -24,9 +18,6 @@ const accessHistory = document.querySelector('#access-history');
 const accessCount = document.querySelector('#access-count');
 const accessFormMessage = document.querySelector('#access-form-message');
 const accessStorageKey = 'arc-van-driver-access';
-const ntfyDriverQr = document.querySelector('#ntfy-driver-qr');
-const ntfyStudentQr = document.querySelector('#ntfy-student-qr');
-const qrUrl = document.querySelector('#qr-url');
 const studentSignupForm = document.querySelector('#student-signup-form');
 const signupMessage = document.querySelector('#signup-message');
 const signupStorageKey = 'arc-van-alert-signups';
@@ -43,7 +34,77 @@ const driverRequestList = document.querySelector('#driver-request-list');
 let latestStudentAlertId = 0;
 let currentVanLocation = '';
 let accessGrants = loadAccessGrants();
-const ntfyUrl = 'https://ntfy.sh/arc-van-fort-knox-045048';
+let socket = null;
+
+// Audio context for native ding sound
+function playAlertTone() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(587.33, ctx.currentTime); // D5
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.1); // A5
+    gain.gain.setValueAtTime(0.15, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.4);
+  } catch (e) {}
+}
+
+// --- Native WebSocket Connection ---
+function initWebSocket() {
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${protocol}//${window.location.host}/ws/alerts`;
+
+  socket = new WebSocket(wsUrl);
+
+  socket.onopen = () => {
+    console.log('✅ Connected to Native WebSocket Alerts');
+  };
+
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'NEW_ALERT') {
+        renderReceivedAlert(data.alert);
+      } else if (data.type === 'WALKING_UPDATE') {
+        if (walkingCount) walkingCount.innerHTML = `${data.count} <small>students</small>`;
+      } else if (data.type === 'NEW_RIDE_REQUEST') {
+        pollDriverRequests();
+        showToast(`New Ride: ${data.name} (${data.pickup} → ${data.dropoff})`);
+      }
+    } catch (err) {
+      console.error('Socket message parse error', err);
+    }
+  };
+
+  socket.onclose = () => {
+    console.log('⚠️ WebSocket disconnected. Reconnecting in 2s...');
+    setTimeout(initWebSocket, 2000);
+  };
+}
+
+function renderReceivedAlert(alert) {
+  playAlertTone();
+  if (studentAlertTitle) studentAlertTitle.textContent = displayVanName(alert.title);
+  if (studentAlertDetail) studentAlertDetail.textContent = displayVanName(alert.detail);
+  if (studentAlertTime) studentAlertTime.textContent = 'Just now';
+
+  const departureMatch = alert.title && alert.title.match(/departs at (.+)$/i);
+  if (departureMatch && studentDepartureTime) {
+    studentDepartureTime.textContent = departureMatch[1];
+  }
+
+  if (alert.location && studentVanLocation) {
+    studentVanLocation.textContent = alert.location;
+    if (studentVanLocationTime) studentVanLocationTime.textContent = 'Updated just now';
+  }
+
+  showToast(`🚐 ${alert.title}`);
+}
 
 function displayVanName(text) {
   return (text || '').replace(/Van 02|VAN 02/g, '045/048 Van');
@@ -62,11 +123,8 @@ function updateDriverControls() {
 window.addEventListener('load', () => {
   switchView('student');
   updateDriverControls();
+  initWebSocket();
 });
-
-if (ntfyDriverQr) ntfyDriverQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(ntfyUrl)}`;
-if (ntfyStudentQr) ntfyStudentQr.src = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(ntfyUrl)}`;
-if (qrUrl) qrUrl.textContent = ntfyUrl;
 
 async function sendDriverAlert(title, detail, toastMessage, location = null) {
   try {
@@ -86,7 +144,7 @@ async function sendDriverAlert(title, detail, toastMessage, location = null) {
     if (!response.ok) throw new Error('Alert failed');
     showToast(toastMessage);
   } catch (err) {
-    showToast('Alert broadcast error');
+    showToast('Failed to broadcast alert');
   }
 }
 
@@ -100,9 +158,9 @@ function showDestinationStep(location) {
   if (otherLoc) otherLoc.classList.remove('visible');
 
   sendDriverAlert(
-    `🚐 Van Location: ${location}`,
-    `045/048 Van is currently at ${location}.`,
-    `Van location posted: ${location}`,
+    `045/048 Van is at ${location}`,
+    `045/048 Van has arrived at ${location}.`,
+    `Van location sent: ${location}`,
     location
   );
 }
@@ -126,8 +184,8 @@ function resetLocationWorkflow() {
 function sendLocationUpdate(destination) {
   const currentLocation = currentVanLocation || 'Van Route';
   sendDriverAlert(
-    `🚐 Van En Route: ${destination}`,
-    `The Van is currently at ${currentLocation} and heading to ${destination}.`,
+    `045/048 Van En Route to ${destination}`,
+    `The Van is leaving ${currentLocation} and heading to ${destination}.`,
     `Alert sent: Heading to ${destination}`,
     currentLocation
   ).then(resetLocationWorkflow);
@@ -201,7 +259,7 @@ if (departureAlertButton) {
     const departureLabel = departure.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     
     sendDriverAlert(
-      `⏱️ 045/048 Van departs at ${departureLabel}`,
+      `045/048 Van departs at ${departureLabel}`,
       `The driver expects to depart in about ${waitTime} minutes.`,
       `Departure alert sent: ${departureLabel}`
     );
@@ -211,7 +269,7 @@ if (departureAlertButton) {
 if (vanFullReturnButton) {
   vanFullReturnButton.addEventListener('click', () => {
     sendDriverAlert(
-      '🚐 045/048 Van is currently full',
+      '045/048 Van is currently full',
       'The van is at capacity. The driver will return shortly for more rides.',
       'Alert sent: Van is full'
     );
@@ -221,7 +279,7 @@ if (vanFullReturnButton) {
 if (noRidesButton) {
   noRidesButton.addEventListener('click', () => {
     sendDriverAlert(
-      '🛑 No rides available right now',
+      'No rides available right now',
       'Service is paused. Please check back later for the next available ride.',
       'Alert sent: Service paused'
     );
@@ -238,7 +296,7 @@ function showToast(message) {
   if (!toast) return;
   toast.textContent = message;
   toast.classList.add('show');
-  window.setTimeout(() => toast.classList.remove('show'), 3000);
+  window.setTimeout(() => toast.classList.remove('show'), 3500);
 }
 
 function switchView(view) {
@@ -284,34 +342,66 @@ function loadAccessGrants() {
   }
 }
 
-function renderRequests() {
-  if (!requestList || !requestBadge || !waitingCount) return;
-  requestList.innerHTML = requests.map((request) => `
-    <div class="request-item">
-      <div class="request-avatar ${request.tone}">${request.initials}</div>
-      <div class="request-info"><strong>${request.name}</strong><span>${request.route}</span></div>
-      <span class="request-time">${request.time}</span>
-      <button class="request-alert-btn" data-student="${request.name}" data-pickup="${request.pickup}">Alert student</button>
-    </div>`).join('');
-  requestBadge.textContent = requests.length;
-  waitingCount.innerHTML = `${requests.length} <small>students</small>`;
+function renderDriverRequests(requests) {
+  if (!driverRequestList) return;
+  driverRequestList.innerHTML = requests.length ? requests.map((request) => `
+    <div class="driver-request-entry">
+      <div class="request-avatar">${(request[1] || '?').slice(0, 2).toUpperCase()}</div>
+      <div class="driver-request-info"><strong>${request[2]}</strong><span>To ${request[3]}</span></div>
+      <span class="driver-request-status">${request[4]}</span>
+    </div>`).join('') : '<p class="access-empty">No student pickup requests yet.</p>';
 }
 
-if (requestList) {
-  requestList.addEventListener('click', (event) => {
-    const button = event.target.closest('.request-alert-btn');
-    if (!button) return;
-    sendDriverAlert(
-      `🚐 Pickup Alert: ${button.dataset.student}`,
-      `045/048 Van is currently at ${button.dataset.pickup} for pickup.`,
-      `Alert sent to ${button.dataset.student}`
-    );
-    button.textContent = 'Alert sent';
-    button.disabled = true;
+function pollDriverRequests() {
+  fetch('/api/driver/requests', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin: driverPin }),
+    cache: 'no-store'
+  }).then((res) => res.json()).then((data) => renderDriverRequests(data.requests || [])).catch(() => {});
+}
+
+// Student form events
+if (headingToVanForm) {
+  headingToVanForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = headingToVanForm.elements.name.value.trim();
+    const email = headingToVanForm.elements.email.value.trim().toLowerCase();
+    if (!name || !email) return;
+    fetch('/api/student/heading-to-van', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, email })
+    }).then(() => {
+      headingToVanForm.reset();
+      showToast("Driver notified you're heading to the van!");
+      updateWalkingCount();
+    });
   });
-  renderRequests();
 }
 
-updateDriverControls();
+if (rideRequestForm) {
+  rideRequestForm.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = rideRequestForm.elements.name.value.trim();
+    const pickup = ridePickupInput ? ridePickupInput.value : '';
+    const dropoff = rideRequestForm.elements.dropoff.value.trim();
+    if (!name || !pickup || !dropoff) return;
+    fetch('/api/request-ride', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, pickup, dropoff })
+    }).then(() => {
+      rideRequestForm.reset();
+      showToast('Ride requested successfully!');
+    });
+  });
+}
+
+document.querySelectorAll('.student-stop-btn').forEach((button) => button.addEventListener('click', () => {
+  document.querySelectorAll('.student-stop-btn').forEach((stop) => stop.classList.remove('selected'));
+  button.classList.add('selected');
+  if (ridePickupInput) ridePickupInput.value = button.dataset.pickup;
+}));
+
 updateWalkingCount();
-window.setInterval(updateWalkingCount, 5000);
