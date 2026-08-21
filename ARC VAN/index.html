@@ -18,12 +18,12 @@
         <button class="role-btn active" data-view="student">Student view</button>
       </div>
       <nav class="nav-links" aria-label="Main navigation">
-        <button class="nav-item" data-view="driver"><span class="nav-icon">◈</span>Operations <span class="nav-count">3</span></button>
+        <button class="nav-item" data-view="driver"><span class="nav-icon">◈</span>Operations</button>
         <button class="nav-item active" data-view="student"><span class="nav-icon">↗</span>Student alerts</button>
       </nav>
       <div class="sidebar-footer">
-        <div class="status-dot"><span></span> Service running</div>
-        <div class="profile"><div class="avatar">JM</div><div><strong>Jordan Miles</strong><small>Driver · 045/048 Van</small></div><span class="more">•••</span></div>
+        <div class="status-dot"><span></span> Native Live Feed Active</div>
+        <div class="profile"><div class="avatar">JM</div><div><strong>Jordan Miles</strong><small>Driver · 045/048 Van</small></div></div>
       </div>
     </aside>
 
@@ -64,17 +64,21 @@
                 <button class="primary-btn" id="send-destination-other">Send alert</button>
               </div>
             </div>
-            <a class="ntfy-link" href="https://ntfy.sh/arc-van-fort-knox-045048" target="_blank" rel="noopener">Open ntfy alert feed</a>
           </div>
         </div>
 
         <div class="stats-grid">
           <article class="stat-card accent"><div class="stat-head"><span>VAN STATUS</span><span class="live-pill"><i></i> LIVE</span></div><strong>On route</strong><div class="stat-foot"><span class="route-chip">045/048 VAN</span><span>Fort Knox Loop</span></div></article>
-          <article class="stat-card"><div class="stat-head"><span>RIDES TODAY</span><span class="stat-icon">↗</span></div><strong>24</strong><div class="stat-foot"><span class="up">↑ Active</span><span>Service live</span></div></article>
-          <article class="stat-card"><div class="stat-head"><span>WAITING</span><span class="stat-icon wait">◷</span></div><strong id="waiting-count">3 <small>students</small></strong><div class="stat-foot"><span>Requests logged</span></div></article>
+          <article class="stat-card"><div class="stat-head"><span>RIDES TODAY</span><span class="stat-icon">↗</span></div><strong>Active</strong><div class="stat-foot"><span class="up">↑ Live</span><span>Direct Socket</span></div></article>
+          <article class="stat-card"><div class="stat-head"><span>HEADING TO VAN</span><span class="stat-icon">→</span></div><strong id="walking-count">0 <small>students</small></strong><div class="stat-foot"><span>Incoming arrivals</span></div></article>
         </div>
 
-        <div class="content-grid">
+        <section class="panel driver-requests-panel">
+          <div class="panel-header"><div><span class="section-kicker">STUDENT REQUESTS</span><h3>Pickup locations</h3></div></div>
+          <div id="driver-request-list" class="driver-request-list"><p class="access-empty">No student pickup requests yet.</p></div>
+        </section>
+
+        <div class="content-grid" style="margin-top:20px;">
           <section class="panel requests-panel">
             <div class="departure-alert">
               <div class="departure-header"><div><span class="meta-label">DEPARTURE ALERT</span><strong>When should students expect departure?</strong></div><span id="departure-time" class="departure-time">5 min</span></div>
@@ -96,11 +100,6 @@
             </div>
           </section>
         </div>
-
-        <section class="panel qr-panel">
-          <div class="qr-copy"><span class="section-kicker">NTFY ALERTS</span><h3>Scan to receive Van alerts</h3><p>Scan this code to open the shared 045/048 Van notification feed.</p><span class="qr-url" id="qr-url">https://ntfy.sh/arc-van-fort-knox-045048</span></div>
-          <div class="qr-code-wrap"><img id="ntfy-driver-qr" width="156" height="156" alt="QR code for 045/048 Van ntfy alerts"><span>Scan for alerts</span></div>
-        </section>
       </section>
 
       <!-- STUDENT VIEW -->
@@ -110,18 +109,55 @@
           <div class="student-orbit-wrap"><div class="student-orbit"><span>ARC<br><b>VAN</b></span></div></div>
         </div>
 
-        <section class="panel qr-panel student-ntfy-panel">
-          <div class="qr-copy">
-            <span class="section-kicker">NTFY ALERTS</span>
-            <h3>Subscribe to 045/048 Van alerts</h3>
-            <p>Scan this QR code or click below to receive real-time location and departure notifications in your browser or phone.</p>
-            <p><a href="https://ntfy.sh/arc-van-fort-knox-045048" target="_blank" rel="noopener" style="color:#b7f0c6;font-weight:bold;font-size:16px;">👉 Click here to Open & Subscribe to Live Alerts</a></p>
-            <span class="qr-url">https://ntfy.sh/arc-van-fort-knox-045048</span>
-          </div>
-          <div class="qr-code-wrap">
-            <img id="ntfy-student-qr" width="156" height="156" alt="QR code for 045/048 Van ntfy alerts">
-            <span>Scan for alerts</span>
-          </div>
+        <div class="student-grid">
+          <section class="panel alert-panel">
+            <div class="panel-header">
+              <div><span class="section-kicker">DRIVER UPDATES</span><h3>Latest van alert</h3></div>
+              <div class="alert-meta"><span class="monitor-status"><i></i> LIVE WEBSOCKET</span><span id="student-alert-time" class="alert-time">Just now</span></div>
+            </div>
+            <div class="alert-callout">
+              <span>⌁</span>
+              <div class="student-alert-columns">
+                <div class="location-alert-column">
+                  <strong id="student-alert-title">045/048 Van Ready</strong>
+                  <p id="student-alert-detail">Live driver location updates will display here.</p>
+                </div>
+                <div class="departure-column">
+                  <span class="meta-label">DEPARTURE TIME</span>
+                  <strong id="student-departure-time">En Route</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel heading-panel">
+            <div class="panel-header"><div><span class="section-kicker">NOTIFY DRIVER</span><h3>I'm heading to the Van</h3></div></div>
+            <p class="muted">Let the driver know you're on your way.</p>
+            <form id="heading-to-van-form" class="heading-form">
+              <label><span>Your name</span><input name="name" type="text" placeholder="e.g. Sam Carter" required></label>
+              <label><span>Email</span><input name="email" type="email" placeholder="you@unit.mil" required></label>
+              <button class="primary-btn" type="submit">I'm heading to the Van</button>
+            </form>
+          </section>
+        </div>
+
+        <section class="panel ride-request-panel" style="margin-top: 24px;">
+          <div class="panel-header"><div><span class="section-kicker">RIDE REQUEST</span><h3>Request a ride</h3></div></div>
+          <form id="ride-request-form" class="ride-request-form">
+            <div class="ride-request-pickup">
+              <span class="meta-label">PICKUP STOP</span>
+              <div class="student-stop-buttons">
+                <button class="student-stop-btn" type="button" data-pickup="PX">PX</button>
+                <button class="student-stop-btn" type="button" data-pickup="Barracks">Barracks</button>
+                <button class="student-stop-btn" type="button" data-pickup="Shoppette">Shoppette</button>
+                <button class="student-stop-btn" type="button" data-pickup="GYM">GYM</button>
+              </div>
+              <input id="ride-pickup" name="pickup" type="hidden" value="PX" required>
+            </div>
+            <label><span>Your name</span><input name="name" type="text" placeholder="e.g. Sam Carter" required></label>
+            <label><span>Destination</span><input name="dropoff" type="text" placeholder="Where to?" required></label>
+            <button class="primary-btn" type="submit">Request ride</button>
+          </form>
         </section>
       </section>
     </main>
@@ -131,7 +167,7 @@
   <footer class="app-footer">
     <div class="footer-content">
       <p><strong>Made by SSG Loya</strong></p>
-      <p>Report issues to me.</p>
+      <p>Native Live Alert Network</p>
     </div>
   </footer>
 
