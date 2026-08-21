@@ -73,6 +73,21 @@
           <article class="stat-card"><div class="stat-head"><span>HEADING TO VAN</span><span class="stat-icon">→</span></div><strong id="walking-count">0 <small>students</small></strong><div class="stat-foot"><span>Incoming arrivals</span></div></article>
         </div>
 
+        <!-- LIVE HEADING TO VAN MANIFEST -->
+        <section class="panel driver-requests-panel" style="border-left: 4px solid var(--coral); margin-bottom: 20px;">
+          <div class="panel-header">
+            <div>
+              <span class="section-kicker" style="color: var(--coral);">INCOMING ARRIVALS</span>
+              <h3>Students Heading to the Van</h3>
+            </div>
+            <button class="secondary-btn" id="clear-all-walkers-btn" style="padding: 6px 12px; font-size: 11px;">Clear All Walkers</button>
+          </div>
+          <div id="driver-walker-list" class="driver-request-list">
+            <p class="access-empty">No students currently walking to the van.</p>
+          </div>
+        </section>
+
+        <!-- STUDENT PICKUP REQUESTS MANIFEST -->
         <section class="panel driver-requests-panel">
           <div class="panel-header"><div><span class="section-kicker">STUDENT REQUESTS</span><h3>Pickup locations</h3></div></div>
           <div id="driver-request-list" class="driver-request-list"><p class="access-empty">No student pickup requests yet.</p></div>
@@ -101,7 +116,6 @@
           </section>
         </div>
 
-        <!-- DRIVER SHARE QR PANEL -->
         <section class="panel qr-panel" style="margin-top: 24px;">
           <div class="qr-copy">
             <span class="section-kicker">PASSENGER ACCESS</span>
@@ -146,16 +160,15 @@
 
           <section class="panel heading-panel">
             <div class="panel-header"><div><span class="section-kicker">NOTIFY DRIVER</span><h3>I'm heading to the Van</h3></div></div>
-            <p class="muted">Let the driver know you're on your way.</p>
+            <p class="muted">Let the driver know you're walking to the pickup spot now.</p>
             <form id="heading-to-van-form" class="heading-form">
-              <label><span>Your name</span><input name="name" type="text" placeholder="e.g. Sam Carter" required></label>
-              <label><span>Email</span><input name="email" type="email" placeholder="you@unit.mil" required></label>
+              <label><span>Your name</span><input name="name" type="text" placeholder="e.g. PVT Smith" required></label>
+              <label><span>Email or Unit</span><input name="email" type="text" placeholder="e.g. B Co / smith@mail.mil" required></label>
               <button class="primary-btn" type="submit">I'm heading to the Van</button>
             </form>
           </section>
         </div>
 
-        <!-- QUICK RIDE REQUEST CONSOLE -->
         <section class="panel ride-request-panel" style="margin-top: 24px;">
           <div class="panel-header">
             <div>
@@ -202,7 +215,6 @@
           </div>
         </section>
 
-        <!-- STUDENT SHARE QR PANEL -->
         <section class="panel qr-panel" style="margin-top: 24px;">
           <div class="qr-copy">
             <span class="section-kicker">SHARE THE RIDE</span>
@@ -219,7 +231,6 @@
     </main>
   </div>
 
-  <!-- DRIVER AUTHENTICATION PIN MODAL -->
   <div id="driver-pin-modal" class="pin-modal" aria-hidden="true" role="dialog" aria-label="Driver PIN">
     <div class="pin-modal-backdrop"></div>
     <div class="pin-modal-content">
