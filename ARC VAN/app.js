@@ -27,7 +27,7 @@ let currentVanLocation = '';
 let studentSelectedPickup = '';
 let socket = null;
 
-// Generate Dynamic App QR Codes pointing to live site URL
+// QR Code Setup
 function initQRCodes() {
   const currentUrl = window.location.origin;
   const qrApiUrl = `https://api.qrserver.com/v1/create-qr-code/?size=312x312&margin=8&data=${encodeURIComponent(currentUrl)}`;
@@ -38,7 +38,7 @@ function initQRCodes() {
   if (studentQrUrl) studentQrUrl.textContent = currentUrl;
 }
 
-// --- SERVER-SIDE AUTHENTICATION HELPERS ---
+// Authentication
 function isDriverAuthenticated() {
   return sessionStorage.getItem(driverAuthKey) === 'true';
 }
@@ -86,7 +86,7 @@ function hidePinModal() {
   modal.setAttribute('aria-hidden', 'true');
 }
 
-// Audio chime
+// Audio tone
 function playAlertTone() {
   try {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -104,7 +104,7 @@ function playAlertTone() {
   } catch (e) {}
 }
 
-// Native WebSocket
+// WebSocket Connection
 function initWebSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/alerts`;
@@ -120,11 +120,12 @@ function initWebSocket() {
       const data = JSON.parse(event.data);
       if (data.type === 'NEW_ALERT') {
         renderReceivedAlert(data.alert);
+      } else if (data.type === 'REQUESTS_UPDATED') {
+        renderDriverRequests(data.requests || []);
       } else if (data.type === 'WALKING_UPDATE') {
         if (walkingCount) walkingCount.innerHTML = `${data.count} <small>students</small>`;
       } else if (data.type === 'NEW_RIDE_REQUEST') {
-        if (isDriverAuthenticated()) pollDriverRequests();
-        showToast(`🚖 New Ride: ${data.name} (${data.pickup} → ${data.dropoff})`);
+        showToast(`🚖 New Ride Request: ${data.name} (${data.pickup} → ${data.dropoff})`);
       }
     } catch (err) {
       console.error('Socket message parse error', err);
@@ -171,6 +172,7 @@ window.addEventListener('load', () => {
         showPinModal('Enter Driver PIN to unlock console');
       } else {
         switchView(button.dataset.view);
+        if (button.dataset.view === 'driver') pollDriverRequests();
       }
     });
   });
@@ -229,7 +231,7 @@ window.addEventListener('load', () => {
   }
 });
 
-// --- DRIVER BROADCAST ACTIONS ---
+// Driver Broadcast Action
 async function sendDriverAlert(title, detail, toastMessage, location = null) {
   try {
     const response = await fetch('/api/driver/broadcast', {
@@ -263,7 +265,7 @@ function showDestinationStep(location) {
 
   sendDriverAlert(
     `045/048 Van is at ${location}`,
-    `045/048 Van has arrived at ${location}.`,
+    `045/048 Van has arrived at ${location}. Active pickup requests here completed.`,
     `Van location sent: ${location}`,
     location
   );
@@ -507,7 +509,7 @@ if (sendCustomRideBtn) {
   });
 }
 
-// Student heading to van notification
+// Heading to van notification
 if (headingToVanForm) {
   headingToVanForm.addEventListener('submit', (event) => {
     event.preventDefault();
@@ -555,17 +557,42 @@ function updateWalkingCount() {
     .catch(() => {});
 }
 
+// Render driver requests with active count and manual pickup button
 function renderDriverRequests(requests) {
   if (!driverRequestList) return;
-  driverRequestList.innerHTML = requests.length ? requests.map((request) => `
+  if (waitingCount) waitingCount.innerHTML = `${requests.length} <small>students</small>`;
+
+  if (!requests.length) {
+    driverRequestList.innerHTML = '<p class="access-empty">No active student pickup requests right now.</p>';
+    return;
+  }
+
+  driverRequestList.innerHTML = requests.map((request) => `
     <div class="driver-request-entry">
       <div class="request-avatar">${(request[1] || '?').slice(0, 2).toUpperCase()}</div>
-      <div class="driver-request-info"><strong>${request[2]}</strong><span>To ${request[3]}</span></div>
-      <span class="driver-request-status">${request[4]}</span>
-    </div>`).join('') : '<p class="access-empty">No student pickup requests yet.</p>';
+      <div class="driver-request-info">
+        <strong>${request[1]}</strong>
+        <span>Pickup: <b>${request[2]}</b> &rarr; Destination: <b>${request[3]}</b></span>
+      </div>
+      <button class="primary-btn complete-request-btn" data-reqid="${request[0]}" style="padding: 6px 10px; font-size: 11px; margin-left: auto;">Picked Up</button>
+    </div>
+  `).join('');
+
+  // Attach completion listener for each item
+  driverRequestList.querySelectorAll('.complete-request-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const reqId = btn.dataset.reqid;
+      fetch('/api/driver/complete-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: getStoredDriverPin(), request_id: parseInt(reqId, 10) })
+      }).then(() => showToast('Request marked picked up'));
+    });
+  });
 }
 
 function pollDriverRequests() {
+  if (!isDriverAuthenticated()) return;
   fetch('/api/driver/requests', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
