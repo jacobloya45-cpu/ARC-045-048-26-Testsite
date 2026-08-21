@@ -15,7 +15,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DRIVER_PIN = "045048"
 MAX_CAPACITY = 15
 
-# --- Native WebSocket Connection Manager ---
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -23,12 +22,10 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket):
         await websocket.accept()
         self.active_connections.append(websocket)
-        print(f"🔌 WebSocket Client Connected. Total: {len(self.active_connections)}")
 
     def disconnect(self, websocket: WebSocket):
         if websocket in self.active_connections:
             self.active_connections.remove(websocket)
-            print(f"🔌 WebSocket Client Disconnected. Total: {len(self.active_connections)}")
 
     async def broadcast(self, message: dict):
         payload = json.dumps(message)
@@ -43,7 +40,6 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- Pydantic Data Models ---
 class PinVerifyPayload(BaseModel):
     pin: str
 
@@ -70,6 +66,10 @@ class CompleteRequestPayload(BaseModel):
     pin: str
     request_id: int
 
+class RemoveWalkerPayload(BaseModel):
+    pin: str
+    walker_id: int
+
 class UpdateStatus(BaseModel):
     pin: str
     request_id: int | None = 0
@@ -78,7 +78,6 @@ class UpdateStatus(BaseModel):
 class DriverRequestQuery(BaseModel):
     pin: str
 
-# --- WebSocket Endpoint ---
 @app.websocket("/ws/alerts")
 async def websocket_alerts_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -96,7 +95,6 @@ async def websocket_alerts_endpoint(websocket: WebSocket):
     except Exception:
         manager.disconnect(websocket)
 
-# --- REST Endpoints ---
 @app.get("/healthz")
 def health():
     return {"status": "healthy"}
@@ -114,7 +112,8 @@ def latest_alert():
 @app.get("/api/status")
 def get_status():
     status = database.get_queue_data()
-    status["walking_count"] = database.get_walking_count()
+    status["walkers"] = database.get_walking_list()
+    status["walking_count"] = len(status["walkers"])
     return status
 
 @app.post("/api/driver/broadcast")
@@ -126,25 +125,15 @@ async def broadcast_alert(alert: AlertPayload):
     subject = alert.title or f"🚐 Van Location: {loc}"
     body = alert.detail or f"045/048 Van is currently at {loc}."
 
-    # Automatically complete and remove active requests at this pickup site
     database.clear_requests_at_location(loc)
-
     alert_id = database.save_alert(subject, body, loc)
     latest = database.get_latest_alert()
     queue_data = database.get_queue_data()
 
-    # Instant broadcast of new alert AND updated manifest to all connected clients
     await manager.broadcast({
         "type": "NEW_ALERT",
-        "alert": latest or {
-            "id": alert_id,
-            "title": subject,
-            "detail": body,
-            "location": loc,
-            "created_at": "Just now"
-        }
+        "alert": latest or {"id": alert_id, "title": subject, "detail": body, "location": loc, "created_at": "Just now"}
     })
-
     await manager.broadcast({
         "type": "REQUESTS_UPDATED",
         "requests": queue_data["manifest"]
@@ -156,7 +145,10 @@ async def broadcast_alert(alert: AlertPayload):
 def driver_requests(payload: DriverRequestQuery):
     if payload.pin != DRIVER_PIN:
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
-    return {"requests": database.get_queue_data()["manifest"]}
+    return {
+        "requests": database.get_queue_data()["manifest"],
+        "walkers": database.get_walking_list()
+    }
 
 @app.post("/api/driver/complete-request")
 async def complete_request(payload: CompleteRequestPayload):
@@ -170,13 +162,17 @@ async def complete_request(payload: CompleteRequestPayload):
     })
     return {"success": True}
 
-@app.post("/api/alerts/signup")
-async def signup_for_alerts(signup: AlertSignup):
-    conn = sqlite3.connect(database.DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO users (name, email) VALUES (?, ?)", (signup.name, signup.email.lower()))
-    conn.commit()
-    conn.close()
+@app.post("/api/driver/remove-walker")
+async def remove_walker(payload: RemoveWalkerPayload):
+    if payload.pin != DRIVER_PIN:
+        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
+    database.remove_single_walker(payload.walker_id)
+    walkers = database.get_walking_list()
+    await manager.broadcast({
+        "type": "WALKERS_UPDATED",
+        "walkers": walkers,
+        "count": len(walkers)
+    })
     return {"success": True}
 
 @app.post("/api/request-ride")
@@ -200,7 +196,6 @@ async def request_ride(req: RideRequest):
     conn.commit()
     conn.close()
 
-    # Instant broadcast of new ride request and full manifest to driver console
     queue_data = database.get_queue_data()
     await manager.broadcast({
         "type": "NEW_RIDE_REQUEST",
@@ -228,8 +223,13 @@ async def heading_to_van(signup: AlertSignup):
     conn.commit()
     conn.close()
 
-    count = database.get_walking_count()
-    await manager.broadcast({"type": "WALKING_UPDATE", "count": count})
+    walkers = database.get_walking_list()
+    await manager.broadcast({
+        "type": "WALKERS_UPDATED",
+        "walkers": walkers,
+        "count": len(walkers),
+        "new_name": signup.name
+    })
     return {"success": True}
 
 @app.post("/api/driver/clear-walking")
@@ -237,10 +237,9 @@ async def clear_walking(payload: UpdateStatus):
     if payload.pin != DRIVER_PIN:
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     database.clear_walking_to_van()
-    await manager.broadcast({"type": "WALKING_UPDATE", "count": 0})
+    await manager.broadcast({"type": "WALKERS_UPDATED", "walkers": [], "count": 0})
     return {"success": True}
 
-# --- Static File Routes ---
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
