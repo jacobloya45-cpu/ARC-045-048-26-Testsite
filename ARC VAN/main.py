@@ -43,9 +43,12 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- Pydantic Data Models ---
+# --- Pydantic Models ---
+class PinVerifyPayload(BaseModel):
+    pin: str
+
 class AlertPayload(BaseModel):
-    pin: str | None = "045048"
+    pin: str
     current_stop: str | None = "Van Route"
     next_stop: str | None = "Van Route"
     eta_mins: int | None = 0
@@ -64,12 +67,12 @@ class AlertSignup(BaseModel):
     email: str
 
 class UpdateStatus(BaseModel):
-    pin: str | None = "045048"
+    pin: str
     request_id: int | None = 0
     new_status: str | None = ""
 
 class DriverRequestQuery(BaseModel):
-    pin: str | None = "045048"
+    pin: str
 
 # --- WebSocket Endpoint ---
 @app.websocket("/ws/alerts")
@@ -77,7 +80,6 @@ async def websocket_alerts_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
     try:
         while True:
-            # Keep socket alive and receive client messages if sent
             data = await websocket.receive_text()
             try:
                 parsed = json.loads(data)
@@ -95,6 +97,13 @@ async def websocket_alerts_endpoint(websocket: WebSocket):
 def health():
     return {"status": "healthy"}
 
+# PIN Verification Endpoint (Validates on backend without exposing PIN to frontend)
+@app.post("/api/driver/verify-pin")
+def verify_driver_pin(payload: PinVerifyPayload):
+    if payload.pin == DRIVER_PIN:
+        return {"success": True, "token": "driver-authenticated-session"}
+    raise HTTPException(status_code=401, detail="Invalid PIN")
+
 @app.get("/api/alerts/latest")
 def latest_alert():
     return database.get_latest_alert() or {"id": 0, "title": "No new alerts", "detail": "", "location": None, "created_at": ""}
@@ -107,6 +116,9 @@ def get_status():
 
 @app.post("/api/driver/broadcast")
 async def broadcast_alert(alert: AlertPayload):
+    if alert.pin != DRIVER_PIN:
+        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
+
     subject = alert.title or f"🚐 Van Location: {alert.current_stop}"
     body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
     loc = alert.location or alert.current_stop
@@ -114,7 +126,6 @@ async def broadcast_alert(alert: AlertPayload):
     alert_id = database.save_alert(subject, body, loc)
     latest = database.get_latest_alert()
 
-    # Native instant push to all connected browsers
     await manager.broadcast({
         "type": "NEW_ALERT",
         "alert": latest or {
@@ -130,6 +141,8 @@ async def broadcast_alert(alert: AlertPayload):
 
 @app.post("/api/driver/requests")
 def driver_requests(payload: DriverRequestQuery):
+    if payload.pin != DRIVER_PIN:
+        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     return {"requests": database.get_queue_data()["manifest"]}
 
 @app.post("/api/alerts/signup")
@@ -161,7 +174,6 @@ async def request_ride(req: RideRequest):
     conn.commit()
     conn.close()
 
-    # Broadcast new ride request to driver console
     await manager.broadcast({
         "type": "NEW_RIDE_REQUEST",
         "name": req.name,
@@ -190,11 +202,13 @@ async def heading_to_van(signup: AlertSignup):
 
 @app.post("/api/driver/clear-walking")
 async def clear_walking(payload: UpdateStatus):
+    if payload.pin != DRIVER_PIN:
+        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     database.clear_walking_to_van()
     await manager.broadcast({"type": "WALKING_UPDATE", "count": 0})
     return {"success": True}
 
-# --- Static File Serving ---
+# Static file routes
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
