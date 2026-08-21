@@ -43,7 +43,7 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 
-# --- Pydantic Models ---
+# --- Pydantic Data Models ---
 class PinVerifyPayload(BaseModel):
     pin: str
 
@@ -65,6 +65,10 @@ class RideRequest(BaseModel):
 class AlertSignup(BaseModel):
     name: str
     email: str
+
+class CompleteRequestPayload(BaseModel):
+    pin: str
+    request_id: int
 
 class UpdateStatus(BaseModel):
     pin: str
@@ -97,7 +101,6 @@ async def websocket_alerts_endpoint(websocket: WebSocket):
 def health():
     return {"status": "healthy"}
 
-# PIN Verification Endpoint (Validates on backend without exposing PIN to frontend)
 @app.post("/api/driver/verify-pin")
 def verify_driver_pin(payload: PinVerifyPayload):
     if payload.pin == DRIVER_PIN:
@@ -119,13 +122,18 @@ async def broadcast_alert(alert: AlertPayload):
     if alert.pin != DRIVER_PIN:
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
 
-    subject = alert.title or f"🚐 Van Location: {alert.current_stop}"
-    body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
     loc = alert.location or alert.current_stop
+    subject = alert.title or f"🚐 Van Location: {loc}"
+    body = alert.detail or f"045/048 Van is currently at {loc}."
+
+    # Automatically complete and remove active requests at this pickup site
+    database.clear_requests_at_location(loc)
 
     alert_id = database.save_alert(subject, body, loc)
     latest = database.get_latest_alert()
+    queue_data = database.get_queue_data()
 
+    # Instant broadcast of new alert AND updated manifest to all connected clients
     await manager.broadcast({
         "type": "NEW_ALERT",
         "alert": latest or {
@@ -137,6 +145,11 @@ async def broadcast_alert(alert: AlertPayload):
         }
     })
 
+    await manager.broadcast({
+        "type": "REQUESTS_UPDATED",
+        "requests": queue_data["manifest"]
+    })
+
     return {"success": True}
 
 @app.post("/api/driver/requests")
@@ -145,11 +158,23 @@ def driver_requests(payload: DriverRequestQuery):
         raise HTTPException(status_code=403, detail="Invalid Driver PIN")
     return {"requests": database.get_queue_data()["manifest"]}
 
+@app.post("/api/driver/complete-request")
+async def complete_request(payload: CompleteRequestPayload):
+    if payload.pin != DRIVER_PIN:
+        raise HTTPException(status_code=403, detail="Invalid Driver PIN")
+    database.complete_single_request(payload.request_id)
+    queue_data = database.get_queue_data()
+    await manager.broadcast({
+        "type": "REQUESTS_UPDATED",
+        "requests": queue_data["manifest"]
+    })
+    return {"success": True}
+
 @app.post("/api/alerts/signup")
 async def signup_for_alerts(signup: AlertSignup):
     conn = sqlite3.connect(database.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", (signup.email.lower(),))
+    cursor.execute("INSERT OR REPLACE INTO users (name, email) VALUES (?, ?)", (signup.name, signup.email.lower()))
     conn.commit()
     conn.close()
     return {"success": True}
@@ -159,7 +184,8 @@ async def request_ride(req: RideRequest):
     conn = sqlite3.connect(database.DB_NAME)
     cursor = conn.cursor()
     request_email = req.email or f"ride-{os.urandom(4).hex()}@arc-van.local"
-    cursor.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", (request_email.lower(),))
+    
+    cursor.execute("INSERT OR REPLACE INTO users (name, email) VALUES (?, ?)", (req.name, request_email.lower()))
     cursor.execute("SELECT id FROM users WHERE email = ?", (request_email.lower(),))
     user_id = cursor.fetchone()[0]
 
@@ -174,12 +200,18 @@ async def request_ride(req: RideRequest):
     conn.commit()
     conn.close()
 
+    # Instant broadcast of new ride request and full manifest to driver console
+    queue_data = database.get_queue_data()
     await manager.broadcast({
         "type": "NEW_RIDE_REQUEST",
         "name": req.name,
         "pickup": req.pickup,
         "dropoff": req.dropoff,
         "status": assigned_status
+    })
+    await manager.broadcast({
+        "type": "REQUESTS_UPDATED",
+        "requests": queue_data["manifest"]
     })
 
     return {"status": assigned_status}
@@ -188,7 +220,7 @@ async def request_ride(req: RideRequest):
 async def heading_to_van(signup: AlertSignup):
     conn = sqlite3.connect(database.DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", (signup.email.lower(),))
+    cursor.execute("INSERT OR REPLACE INTO users (name, email) VALUES (?, ?)", (signup.name, signup.email.lower()))
     conn.commit()
     cursor.execute("SELECT id FROM users WHERE email = ?", (signup.email.lower(),))
     user_id = cursor.fetchone()[0]
@@ -208,7 +240,7 @@ async def clear_walking(payload: UpdateStatus):
     await manager.broadcast({"type": "WALKING_UPDATE", "count": 0})
     return {"success": True}
 
-# Static file routes
+# --- Static File Routes ---
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
