@@ -1,8 +1,8 @@
 import os
 import sqlite3
-import urllib.request
-import urllib.error
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+import json
+from typing import List
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -12,35 +12,38 @@ app = FastAPI(title="ARC Class 045/048 Shuttle")
 database.init_db()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
 DRIVER_PIN = "045048"
 MAX_CAPACITY = 15
-NTFY_TOPIC = "arc-van-fort-knox-045048"
 
-def send_ntfy(title: str, message: str) -> bool:
-    """Direct synchronous push to ntfy.sh"""
-    url = f"https://ntfy.sh/{NTFY_TOPIC}"
-    headers = {
-        "Title": title.encode("utf-8").decode("latin-1", "ignore"),
-        "Priority": "high",
-        "Tags": "minibus,round_pushpin",
-        "User-Agent": "ARC-Van-Tracker/1.0"
-    }
-    
-    req = urllib.request.Request(
-        url,
-        data=message.encode("utf-8"),
-        headers=headers,
-        method="POST"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            print(f"✅ [NTFY SUCCESS] Alert published: '{title}' - Status {resp.status}")
-            return True
-    except Exception as e:
-        print(f"❌ [NTFY ERROR] Failed to send alert: {e}")
-        return False
+# --- Native WebSocket Connection Manager ---
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
 
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        print(f"🔌 WebSocket Client Connected. Total: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+            print(f"🔌 WebSocket Client Disconnected. Total: {len(self.active_connections)}")
+
+    async def broadcast(self, message: dict):
+        payload = json.dumps(message)
+        dead_connections = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_text(payload)
+            except Exception:
+                dead_connections.append(connection)
+        for dead in dead_connections:
+            self.disconnect(dead)
+
+manager = ConnectionManager()
+
+# --- Pydantic Data Models ---
 class AlertPayload(BaseModel):
     pin: str | None = "045048"
     current_stop: str | None = "Van Route"
@@ -68,17 +71,29 @@ class UpdateStatus(BaseModel):
 class DriverRequestQuery(BaseModel):
     pin: str | None = "045048"
 
-class ButtonPress(BaseModel):
-    label: str
-    view: str | None = None
+# --- WebSocket Endpoint ---
+@app.websocket("/ws/alerts")
+async def websocket_alerts_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep socket alive and receive client messages if sent
+            data = await websocket.receive_text()
+            try:
+                parsed = json.loads(data)
+                if parsed.get("type") == "PING":
+                    await websocket.send_text(json.dumps({"type": "PONG"}))
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception:
+        manager.disconnect(websocket)
 
+# --- REST Endpoints ---
 @app.get("/healthz")
 def health():
     return {"status": "healthy"}
-
-@app.post("/api/button-press")
-def button_press(press: ButtonPress):
-    return {"success": True}
 
 @app.get("/api/alerts/latest")
 def latest_alert():
@@ -90,32 +105,44 @@ def get_status():
     status["walking_count"] = database.get_walking_count()
     return status
 
+@app.post("/api/driver/broadcast")
+async def broadcast_alert(alert: AlertPayload):
+    subject = alert.title or f"🚐 Van Location: {alert.current_stop}"
+    body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
+    loc = alert.location or alert.current_stop
+
+    alert_id = database.save_alert(subject, body, loc)
+    latest = database.get_latest_alert()
+
+    # Native instant push to all connected browsers
+    await manager.broadcast({
+        "type": "NEW_ALERT",
+        "alert": latest or {
+            "id": alert_id,
+            "title": subject,
+            "detail": body,
+            "location": loc,
+            "created_at": "Just now"
+        }
+    })
+
+    return {"success": True}
+
 @app.post("/api/driver/requests")
 def driver_requests(payload: DriverRequestQuery):
     return {"requests": database.get_queue_data()["manifest"]}
 
-@app.post("/api/driver/broadcast")
-def broadcast_alert(alert: AlertPayload, bg: BackgroundTasks):
-    subject = alert.title or f"Van Location: {alert.current_stop}"
-    body = alert.detail or f"045/048 Van is currently at {alert.current_stop}."
-
-    database.save_alert(subject, body, alert.location or alert.current_stop)
-    send_ntfy(subject, body)
-
-    return {"success": True}
-
 @app.post("/api/alerts/signup")
-def signup_for_alerts(signup: AlertSignup):
+async def signup_for_alerts(signup: AlertSignup):
     conn = sqlite3.connect(database.DB_NAME)
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", (signup.email.lower(),))
     conn.commit()
     conn.close()
-    send_ntfy("New Alert Signup", f"{signup.name} signed up for alerts.")
     return {"success": True}
 
 @app.post("/api/request-ride")
-def request_ride(req: RideRequest):
+async def request_ride(req: RideRequest):
     conn = sqlite3.connect(database.DB_NAME)
     cursor = conn.cursor()
     request_email = req.email or f"ride-{os.urandom(4).hex()}@arc-van.local"
@@ -133,11 +160,20 @@ def request_ride(req: RideRequest):
     )
     conn.commit()
     conn.close()
-    send_ntfy("New Ride Request", f"{req.name} requested pickup at {req.pickup} to {req.dropoff}.")
+
+    # Broadcast new ride request to driver console
+    await manager.broadcast({
+        "type": "NEW_RIDE_REQUEST",
+        "name": req.name,
+        "pickup": req.pickup,
+        "dropoff": req.dropoff,
+        "status": assigned_status
+    })
+
     return {"status": assigned_status}
 
 @app.post("/api/student/heading-to-van")
-def heading_to_van(signup: AlertSignup):
+async def heading_to_van(signup: AlertSignup):
     conn = sqlite3.connect(database.DB_NAME)
     cursor = conn.cursor()
     cursor.execute("INSERT OR IGNORE INTO users (email) VALUES (?)", (signup.email.lower(),))
@@ -147,14 +183,18 @@ def heading_to_van(signup: AlertSignup):
     cursor.execute("INSERT INTO walking_to_van (user_id) VALUES (?)", (user_id,))
     conn.commit()
     conn.close()
-    send_ntfy("Student Walking to Van", f"{signup.name} is on the way to the van.")
+
+    count = database.get_walking_count()
+    await manager.broadcast({"type": "WALKING_UPDATE", "count": count})
     return {"success": True}
 
 @app.post("/api/driver/clear-walking")
-def clear_walking(payload: UpdateStatus):
+async def clear_walking(payload: UpdateStatus):
     database.clear_walking_to_van()
+    await manager.broadcast({"type": "WALKING_UPDATE", "count": 0})
     return {"success": True}
 
+# --- Static File Serving ---
 @app.get("/")
 def serve_index():
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
